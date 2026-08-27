@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,15 @@ from .audio_analyzer import analyze_audio
 from .config import DifficultyPreset, get_difficulty_preset
 from .event_selector import select_events
 from .generation_config import build_pattern_config
-from .models import BeatmapExport, GeneratedHitObject, GenerationDiagnostics, GenerationResult
+from .models import (
+    BeatmapExport,
+    GeneratedCircleHitObject,
+    GeneratedHitObject,
+    GeneratedSliderHitObject,
+    GeneratedSpinnerHitObject,
+    GenerationDiagnostics,
+    GenerationResult,
+)
 from .position_generator import (
     PLAYFIELD_HEIGHT,
     PLAYFIELD_WIDTH,
@@ -22,6 +31,7 @@ from .position_generator import (
 from .utils import (
     MapGeneratorError,
     average,
+    clamp,
     finite_number,
     format_seconds,
     resolve_browser_audio_path,
@@ -170,8 +180,9 @@ def generate_beatmap_from_analysis(
             sustained = analyze_sustained_content(raw_samples, raw_sample_rate)
             slider_cfg = SliderPipelineConfig(
                 slider_enabled=True,
-                min_confidence_threshold=0.3,
+                min_confidence_threshold=0.2,
                 max_slider_ratio=preset.slider_max_ratio,
+                min_slider_ratio=getattr(preset, 'slider_min_ratio', 0.0),
                 quality_threshold=preset.slider_quality_threshold,
             )
 
@@ -238,6 +249,18 @@ def generate_beatmap_from_analysis(
             generation_warnings.append(
                 f"[spinner] Spinner processing failed: {exc}"
             )
+
+    # ---- Phase 24: Density Enforcement & Continuous Fill ----
+    # Enforce minimum object density by injecting bridging fill objects
+    # when the current object count is below the target.
+    positioned = _enforce_density_minimum(
+        positioned=positioned,
+        selected_events=selected_events,
+        analysis=analysis,
+        preset=preset,
+        seed=seed,
+        rhythm_model=rhythm_model,
+    )
 
     browser_audio_path = resolve_browser_audio_path(
         audio_source_path=audio_path,
@@ -506,6 +529,153 @@ def format_generation_report(
             lines.append(f"- {warning}")
 
     return "\n".join(lines)
+
+
+def _enforce_density_minimum(
+    *,
+    positioned: PositionGenerationResult,
+    selected_events: list[Any],
+    analysis: Any,
+    preset: DifficultyPreset,
+    seed: int,
+    rhythm_model: Any = None,
+) -> PositionGenerationResult:
+    """Enforce minimum object density by injecting bridging fill objects.
+
+    If the current object count is below the density target for the audio
+    duration, inject 1/2-beat bridging circles and sliders to maintain
+    map flow. This prevents the map from feeling empty even when onset
+    confidence is low.
+    """
+    if preset.min_density_target <= 0:
+        return positioned
+
+    duration_sec = analysis.duration_ms / 1000.0
+    target_count = int(preset.min_density_target * duration_sec)
+    target_count = max(target_count, int(preset.target_density * duration_sec) if preset.target_density > 0 else target_count)
+    current_count = len(positioned.objects)
+
+    if current_count >= target_count:
+        return positioned
+
+    deficit = target_count - current_count
+    objects = list(positioned.objects)
+    rng = random.Random(seed + 9999)
+
+    # Build existing time set for conflict avoidance
+    existing_times = {obj.time for obj in objects}
+
+    # Determine the beat interval for bridging fill (1/2 beat grid)
+    bpm = analysis.bpm if analysis.bpm > 0 else 120.0
+    beat_interval_ms = int(round(60000.0 / bpm))
+    half_beat_ms = beat_interval_ms // 2
+
+    # Find the biggest gaps to fill
+    sorted_objs = sorted(objects, key=lambda o: o.time)
+    gaps: list[tuple[int, int, int, int]] = []  # (gap_ms, gap_start, gap_end, index)
+    for i in range(len(sorted_objs) - 1):
+        end_i = getattr(sorted_objs[i], 'end_time', None) or sorted_objs[i].time
+        start_next = sorted_objs[i + 1].time
+        gap = start_next - end_i
+        if gap >= half_beat_ms * 2:  # at least 1 beat gap
+            gaps.append((gap, int(end_i), start_next, i))
+
+    gaps.sort(key=lambda g: -g[0])  # biggest gaps first
+
+    injected = 0
+    for gap_ms, gap_start, gap_end, _idx in gaps:
+        if injected >= deficit:
+            break
+
+        # Fill the gap with 1/2-beat bridging objects
+        fill_time = gap_start + half_beat_ms
+        while fill_time < gap_end - half_beat_ms and injected < deficit:
+            if fill_time in existing_times:
+                fill_time += half_beat_ms
+                continue
+
+            # Check minimum gap constraint
+            prev_time = objects[objects.index(sorted_objs[_idx])].time if _idx < len(objects) else 0
+            next_obj = sorted_objs[_idx + 1] if _idx + 1 < len(sorted_objs) else None
+            if next_obj is not None and (next_obj.time - fill_time) < preset.min_gap_ms:
+                fill_time += half_beat_ms
+                continue
+            if (fill_time - prev_time) < preset.min_gap_ms:
+                fill_time += half_beat_ms
+                continue
+
+            # Determine energy at this time for strength
+            energy = analysis.energy_at(fill_time)
+            strength = 0.25 + energy * 0.4
+
+            # Interpolate position between neighbors
+            prev_obj = sorted_objs[_idx] if _idx < len(objects) else None
+            if prev_obj is not None and next_obj is not None:
+                px = getattr(prev_obj, 'x', 256)
+                py = getattr(prev_obj, 'y', 192)
+                nx = getattr(next_obj, 'x', 256)
+                ny = getattr(next_obj, 'y', 192)
+                t_frac = (fill_time - prev_obj.time) / max(1, next_obj.time - prev_obj.time)
+                t_frac = clamp(t_frac, 0.0, 1.0)
+                # Add perpendicular offset for variety
+                angle = rng.uniform(0.0, math.pi * 2)
+                offset = preset.min_jump_distance * 0.5
+                x = int(clamp(px + (nx - px) * t_frac + math.cos(angle) * offset, 32, 480))
+                y = int(clamp(py + (ny - py) * t_frac + math.sin(angle) * offset, 32, 352))
+            else:
+                x = rng.randint(64, 448)
+                y = rng.randint(64, 320)
+
+            new_obj = GeneratedCircleHitObject(
+                id=0,
+                type="circle",
+                x=x,
+                y=y,
+                time=fill_time,
+                extra_fields={
+                    "source": "density_fill",
+                    "energy": round(energy, 4),
+                },
+            )
+
+            insert_pos = 0
+            for j, obj in enumerate(objects):
+                if obj.time > fill_time:
+                    insert_pos = j
+                    break
+            else:
+                insert_pos = len(objects)
+
+            objects.insert(insert_pos, new_obj)
+            existing_times.add(fill_time)
+            injected += 1
+            fill_time += half_beat_ms
+
+    # Renumber IDs
+    for idx, obj in enumerate(objects, start=1):
+        if hasattr(obj, 'id'):
+            if obj.type == 'circle':
+                objects[idx - 1] = GeneratedCircleHitObject(
+                    id=idx, type='circle', x=obj.x, y=obj.y, time=obj.time,
+                    extra_fields=dict(obj.extra_fields),
+                )
+            elif obj.type == 'slider':
+                objects[idx - 1] = GeneratedSliderHitObject(
+                    id=idx, type='slider', x=obj.x, y=obj.y, time=obj.time,
+                    end_time=obj.end_time, path_type=obj.path_type,
+                    control_points=obj.control_points, repeats=obj.repeats,
+                    pixel_length=obj.pixel_length, extra_fields=dict(obj.extra_fields),
+                )
+            elif obj.type == 'spinner':
+                objects[idx - 1] = GeneratedSpinnerHitObject(
+                    id=idx, type='spinner', time=obj.time, end_time=obj.end_time,
+                    extra_fields=dict(obj.extra_fields),
+                )
+
+    return PositionGenerationResult(
+        objects=objects,
+        rejected_candidates=positioned.rejected_candidates,
+    )
 
 
 def _merge_position_variations(

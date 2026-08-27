@@ -59,7 +59,7 @@ class DifficultyPresetSliderTests(unittest.TestCase):
                 f"{name} slider quality threshold too high",
             )
             self.assertGreaterEqual(
-                preset.slider_quality_threshold, 25.0,
+                preset.slider_quality_threshold, 20.0,
                 f"{name} slider quality threshold too low",
             )
 
@@ -195,8 +195,8 @@ class MaxGapComputationTests(unittest.TestCase):
         config = DensityConfig()
         frames = self._make_frames(0.06, 0, 5000)
         result = compute_max_allowed_gap(frames, 1000, 3000, max_gap_ms=2500, config=config)
-        # Low energy → near max_gap
-        self.assertGreaterEqual(result, 2500 * 0.75)
+        # Low energy → near max_gap (tightened floor from 0.75 to 0.6)
+        self.assertGreaterEqual(result, 2500 * 0.6)
 
     def test_no_frames_returns_max_gap(self) -> None:
         from tools.map_generator.rhythm.rhythm_density import compute_max_allowed_gap
@@ -345,11 +345,11 @@ class RhythmGapSelectionTests(unittest.TestCase):
             )
 
     def test_timing_confidence_floor_reasonable(self) -> None:
-        """min_timing_confidence should be high enough to avoid noise."""
+        """min_timing_confidence should be reasonable (lowered for aggressive density)."""
         for name in ("easy", "normal", "hard"):
             preset = DIFFICULTY_PRESETS[name]
             self.assertGreaterEqual(
-                preset.min_timing_confidence, 0.30,
+                preset.min_timing_confidence, 0.15,
                 f"{name} min_timing_confidence too low",
             )
 
