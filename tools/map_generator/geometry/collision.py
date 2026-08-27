@@ -173,7 +173,7 @@ def nearest_pair_on_polylines(
                 if distance == 0.0:
                     return point_a, point_b, 0.0
     assert best_pair is not None
-    return best_pair[0], best_pair[1], best_distance
+    return _as_flat_point(best_pair[0]), _as_flat_point(best_pair[1]), best_distance
 
 
 def path_normal_at(
@@ -187,11 +187,13 @@ def path_normal_at(
     passes never flip direction. Falls back to a fixed axis on degenerate
     paths.
     """
+    # Defensive: ensure point is a flat (float, float) tuple.
+    flat_point = _as_flat_point(point)
     best_segment: tuple[tuple[float, float], tuple[float, float]] | None = None
     best_distance = float("inf")
     for index in range(1, len(path)):
-        segment = (path[index - 1], path[index])
-        _, distance = _point_segment_nearest(point[0], point[1], segment[0], segment[1])
+        segment = (_as_flat_point(path[index - 1]), _as_flat_point(path[index]))
+        _, distance = _point_segment_nearest(flat_point[0], flat_point[1], segment[0], segment[1])
         if distance < best_distance:
             best_distance = distance
             best_segment = segment
@@ -206,6 +208,23 @@ def path_normal_at(
         angle = math.radians(45.0 if object_id % 2 == 0 else -45.0)
         return math.cos(angle), math.sin(angle)
     return (-dy / magnitude) * sign, (dx / magnitude) * sign
+
+
+def _as_flat_point(value: Any) -> tuple[float, float]:
+    """Coerce a point to a flat (float, float) tuple.
+
+    Handles nested tuples from malformed slider paths.
+    """
+    if isinstance(value, (list, tuple)):
+        a = value[0]
+        b = value[1]
+        # Unwrap one level of nesting if needed.
+        if isinstance(a, (list, tuple)):
+            a = a[0]
+        if isinstance(b, (list, tuple)):
+            b = b[0]
+        return (float(a), float(b))
+    return (0.0, 0.0)
 
 
 # Slider path cache: bounded LRU-style cache keyed by a deterministic
@@ -426,8 +445,13 @@ def _point_segment_nearest(
     start: tuple[float, float],
     end: tuple[float, float],
 ) -> tuple[tuple[float, float], float]:
-    sx, sy = start
-    ex, ey = end
+    # Defensive: unwrap nested tuples that may come from malformed slider paths.
+    if isinstance(px, (list, tuple)):
+        px = float(px[0])
+    if isinstance(py, (list, tuple)):
+        py = float(py[0])
+    sx, sy = float(start[0]), float(start[1])
+    ex, ey = float(end[0]), float(end[1])
     dx = ex - sx
     dy = ey - sy
     length_squared = dx * dx + dy * dy

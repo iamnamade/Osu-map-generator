@@ -157,6 +157,17 @@ def run_candidate_evolution(
     passes = max(0, min(MAX_EVOLUTION_PASSES, int(max_passes)))
     policy = validate_archive_policy(archive_policy)
     analysis = load_analysis_json(analysis_path)
+
+    # Load raw audio samples for slider intelligence (sustained analysis).
+    raw_samples = None
+    raw_sample_rate = None
+    if preset.slider_enabled:
+        try:
+            from ..audio_analyzer import _load_audio
+            raw_samples, raw_sample_rate = _load_audio(audio_path)
+        except Exception:
+            raw_samples = None
+
     shared_events = None if timing_variation else select_events(analysis, preset)
     browser_audio_path = browser_audio_path_override or _public_path(
         audio_path,
@@ -233,6 +244,8 @@ def run_candidate_evolution(
                 preset=preset,
                 base_variation=base_variation,
                 phrase_info=resolved_phrase_info,
+                raw_samples=raw_samples,
+                raw_sample_rate=raw_sample_rate,
             )
         else:
             reused_count += 1
