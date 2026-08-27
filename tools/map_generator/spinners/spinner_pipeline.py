@@ -196,18 +196,25 @@ def process_spinners(
             _record_rejection(diagnostics, "quality")
             continue
 
+        # Enforce integer timestamps and strict endTime > time.
+        spinner_start_int = int(round(spinner_start))
+        spinner_end_int = int(round(spinner_end))
+        min_dur = getattr(preset, 'spinner_min_duration_ms', 800)
+        if spinner_end_int <= spinner_start_int:
+            spinner_end_int = spinner_start_int + min_dur
+
         spinner_obj = GeneratedSpinnerHitObject(
             id=0,
             type="spinner",
-            time=spinner_start,
-            end_time=spinner_end,
+            time=spinner_start_int,
+            end_time=spinner_end_int,
             extra_fields={
                 "qualityScore": quality.overall,
                 "regionType": fitted_candidate.region_type,
                 "triggerType": fitted_candidate.trigger_type,
             },
         )
-        accepted_starts.append((spinner_start, spinner_obj))
+        accepted_starts.append((spinner_start_int, spinner_obj))
         diagnostics.accepted_spinners += 1
         _record_accepted(diagnostics, fitted_candidate, quality)
 
@@ -323,18 +330,23 @@ def _force_spinners_for_minimum(
             if not has_clearance:
                 continue
 
+            spinner_start_int = int(round(spinner_start))
+            spinner_end_int = int(round(spinner_end))
+            if spinner_end_int <= spinner_start_int:
+                spinner_end_int = spinner_start_int + int(preset.spinner_min_duration_ms)
+
             spinner_obj = GeneratedSpinnerHitObject(
                 id=0,
                 type="spinner",
-                time=spinner_start,
-                end_time=spinner_end,
+                time=spinner_start_int,
+                end_time=spinner_end_int,
                 extra_fields={
                     "qualityScore": 50.0,
                     "regionType": "forced",
                     "triggerType": "structural_transition",
                 },
             )
-            result.append((spinner_start, spinner_obj))
+            result.append((spinner_start_int, spinner_obj))
             placed_times.add(spinner_start)
             forced_count += 1
             placed = True
@@ -378,7 +390,7 @@ def _check_spinner_clearance(
 
 def _object_end_time(obj: GeneratedHitObject) -> int:
     end_time = getattr(obj, "end_time", None)
-    return int(end_time) if end_time is not None else int(obj.time)
+    return int(round(end_time)) if end_time is not None else int(round(obj.time))
 
 
 def _intro_gap(
@@ -480,8 +492,8 @@ def _merge_objects(
             combined[index - 1] = GeneratedSpinnerHitObject(
                 id=index,
                 type="spinner",
-                time=obj.time,
-                end_time=obj.end_time,
+                time=int(round(obj.time)),
+                end_time=int(round(obj.end_time)),
                 extra_fields=dict(obj.extra_fields),
             )
         else:
@@ -496,7 +508,7 @@ def _reid_object(obj: GeneratedHitObject, new_id: int) -> GeneratedHitObject:
             type="circle",
             x=obj.x,
             y=obj.y,
-            time=obj.time,
+            time=int(round(obj.time)),
             extra_fields=dict(obj.extra_fields),
         )
     if obj.type == "slider":
@@ -505,8 +517,8 @@ def _reid_object(obj: GeneratedHitObject, new_id: int) -> GeneratedHitObject:
             type="slider",
             x=obj.x,
             y=obj.y,
-            time=obj.time,
-            end_time=obj.end_time,
+            time=int(round(obj.time)),
+            end_time=int(round(obj.end_time)),
             path_type=obj.path_type,
             control_points=obj.control_points,
             repeats=obj.repeats,
