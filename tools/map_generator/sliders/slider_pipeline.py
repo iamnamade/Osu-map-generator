@@ -42,11 +42,11 @@ class SliderPipelineConfig:
     """Configuration for the slider intelligence pipeline."""
 
     slider_enabled: bool = True
-    min_confidence_threshold: float = 0.3
-    max_slider_ratio: float = 0.25  # max fraction of objects that can be sliders
-    min_slider_ratio: float = 0.0  # minimum fraction of objects that must be sliders (0 = disabled)
-    quality_threshold: float = 40.0  # minimum quality score to accept
-    fill_confidence_threshold: float = 0.15  # lower threshold for minimum-ratio fill pass
+    min_confidence_threshold: float = 0.2
+    max_slider_ratio: float = 0.35  # max fraction of objects that can be sliders
+    min_slider_ratio: float = 0.35  # minimum fraction of objects that must be sliders
+    quality_threshold: float = 20.0  # lower quality threshold to accept more sliders
+    fill_confidence_threshold: float = 0.08  # lower threshold for minimum-ratio fill pass
 
 
 DEFAULT_SLIDER_CONFIG = SliderPipelineConfig()

@@ -85,8 +85,8 @@ def decide_slider(
     )
     probability *= multipliers["probability"]
 
-    # Lower threshold so sliders appear more often across all difficulties.
-    prob_threshold = 0.15 if preset.name == "easy" else 0.18
+    # Very low threshold so sliders appear more often across all difficulties.
+    prob_threshold = 0.10
     if probability < prob_threshold:
         return None
 
@@ -151,13 +151,15 @@ def _compute_slider_probability(
     prob = 0.0
 
     if sustained_score > 0.5:
-        prob += 0.4
+        prob += 0.45
     elif sustained_score > 0.3:
-        prob += 0.25
+        prob += 0.30
     elif sustained_score > 0.15:
-        prob += 0.1
+        prob += 0.18
     elif sustained_score > 0.08:
-        prob += 0.05  # even mild sustained content helps slider candidacy
+        prob += 0.10
+    elif sustained_score > 0.03:
+        prob += 0.06  # even very mild sustained content helps slider candidacy
 
     if 0.25 <= energy <= 0.75:
         prob += 0.18  # moderate energy is ideal for sliders
@@ -177,13 +179,13 @@ def _compute_slider_probability(
 
     # Boost slider probability for all difficulties to improve object diversity
     if preset.name == "easy":
-        prob *= 1.15
+        prob *= 1.25
     elif preset.name == "hard":
-        prob *= 1.5
+        prob *= 1.65
     else:
-        prob *= 1.35  # normal gets a significant boost
+        prob *= 1.55  # normal gets a significant boost
 
-    cap = 0.80 if preset.name == "hard" else 0.65
+    cap = 0.90 if preset.name == "hard" else 0.75
     return max(0.0, min(cap, prob))
 
 
