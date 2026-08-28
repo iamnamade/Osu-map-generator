@@ -262,6 +262,103 @@ def generate_beatmap_from_analysis(
         rhythm_model=rhythm_model,
     )
 
+    # ---- Post-density slider ratio enforcement ----
+    # Density enforcement may have added extra circles that diluted the
+    # slider ratio.  Convert exactly enough circles to sliders to reach
+    # the minimum ratio, while never exceeding the maximum.
+    if preset.slider_enabled and sustained is not None and raw_samples is not None and raw_sample_rate is not None:
+        post_density_objects = list(positioned.objects)
+        post_density_sliders = sum(1 for o in post_density_objects if o.type == "slider")
+        post_density_total = len(post_density_objects)
+        min_ratio = getattr(preset, 'slider_min_ratio', 0.0)
+        max_ratio = preset.slider_max_ratio
+        if post_density_total > 0 and min_ratio > 0:
+            import math as _math
+            target_min = max(0, _math.ceil(post_density_total * min_ratio))
+            target_max = max(1, int(post_density_total * max_ratio))
+            # Only fill if below minimum AND the slider count hasn't exceeded max
+            if post_density_sliders < target_min and post_density_sliders <= target_max:
+                try:
+                    from .sliders.slider_pipeline import (
+                        SliderPipelineConfig,
+                        _build_slider,
+                        _find_event_index,
+                        _force_slider_candidate,
+                    )
+                    from .sliders.sustained_analysis import analyze_sustained_content
+                    from .sliders.slider_decision import decide_slider
+                    import random as _random
+
+                    needed = min(target_min - post_density_sliders, target_max - post_density_sliders)
+                    _rng = _random.Random(seed + 1000)
+                    event_by_time = {e.time_ms: e for e in selected_events}
+                    fill_objects: list = []
+                    fill_count = 0
+                    post_points = _extract_points(post_density_objects)
+
+                    post_cfg = SliderPipelineConfig(
+                        slider_enabled=True,
+                        min_confidence_threshold=0.2,
+                        max_slider_ratio=max_ratio,
+                        min_slider_ratio=0.0,
+                        quality_threshold=preset.slider_quality_threshold,
+                    )
+
+                    for idx, obj in enumerate(post_density_objects):
+                        if fill_count >= needed:
+                            fill_objects.append(obj)
+                            continue
+                        if obj.type != "circle":
+                            fill_objects.append(obj)
+                            continue
+                        if idx == 0 or idx == len(post_density_objects) - 1:
+                            fill_objects.append(obj)
+                            continue
+                        event = event_by_time.get(obj.time)
+                        if event is None:
+                            fill_objects.append(obj)
+                            continue
+                        ev_idx = _find_event_index(selected_events, obj.time)
+                        prev_ev = selected_events[ev_idx - 1] if ev_idx > 0 else None
+                        next_ev = selected_events[ev_idx + 1] if ev_idx < len(selected_events) - 1 else None
+                        nxt_gap = selected_events[ev_idx + 1].time_ms - obj.time if ev_idx < len(selected_events) - 1 else None
+                        candidate = decide_slider(
+                            event=event, event_index=ev_idx, sustained=sustained,
+                            preset=preset, previous_event=prev_ev, next_event=next_ev,
+                            previous_gap_ms=None, next_gap_ms=nxt_gap,
+                            phrase_strategy=None, rng=_rng,
+                        )
+                        if candidate is None:
+                            candidate = _force_slider_candidate(
+                                event=event, event_index=ev_idx, preset=preset,
+                                next_gap_ms=nxt_gap, rng=_rng,
+                            )
+                        if candidate is None:
+                            fill_objects.append(obj)
+                            continue
+                        result = _build_slider(
+                            obj, candidate, post_points, idx, preset, _rng,
+                            post_cfg, quality_threshold_override=5.0,
+                        )
+                        if result is None:
+                            fill_objects.append(obj)
+                            continue
+                        slider_obj, end_point, _q = result
+                        fill_objects.append(slider_obj)
+                        fill_count += 1
+                        post_density_sliders += 1
+
+                    if fill_count > 0:
+                        fill_objects.sort(key=lambda o: (o.time, o.id))
+                        positioned = PositionGenerationResult(
+                            objects=fill_objects,
+                            rejected_candidates=positioned.rejected_candidates,
+                        )
+                except Exception as exc:
+                    generation_warnings.append(
+                        f"[slider] Post-density slider enforcement failed: {exc}"
+                    )
+
     browser_audio_path = resolve_browser_audio_path(
         audio_source_path=audio_path,
         project_root=project_root,

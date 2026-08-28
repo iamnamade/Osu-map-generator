@@ -179,6 +179,9 @@ def process_sliders(
     # ---- Minimum slider ratio enforcement ----
     # If we haven't met the minimum slider ratio, do a second pass converting
     # more circles to sliders with relaxed quality thresholds.
+    import sys as _sys
+    _sys.stderr.write(f"  [FILL-CHECK] min_sliders={min_sliders}, slider_count={slider_count}, min_ratio={config.min_slider_ratio}\n")
+    _sys.stderr.flush()
     if min_sliders > 0 and slider_count < min_sliders:
         remaining_needed = min_sliders - slider_count
         second_pass_objects: list[GeneratedHitObject] = []
@@ -238,11 +241,17 @@ def process_sliders(
                 second_pass_points.append(new_points[i] if i < len(new_points) else _Point(0, 0))
                 continue
 
-            slider_result = _build_slider(obj, candidate, new_points, i, preset, rng, config)
+            # Use a lower quality threshold for fill-pass sliders (forced conversion)
+            fill_threshold = min(config.quality_threshold, 5.0)
+            slider_result = _build_slider(obj, candidate, new_points, i, preset, rng, config, quality_threshold_override=fill_threshold)
             if slider_result is None:
+                _sys.stderr.write(f"  [FILL-PASS] Rejected circle at idx={i}, time={obj.time}\n")
+                _sys.stderr.flush()
                 second_pass_objects.append(obj)
                 second_pass_points.append(new_points[i] if i < len(new_points) else _Point(0, 0))
                 continue
+            _sys.stderr.write(f"  [FILL-PASS] Converted circle idx={i}, time={obj.time} -> slider\n")
+            _sys.stderr.flush()
 
             slider_obj, end_point, quality = slider_result
             second_pass_objects.append(slider_obj)
@@ -341,6 +350,7 @@ def _build_slider(
     preset: DifficultyPreset,
     rng: random.Random,
     config: SliderPipelineConfig,
+    quality_threshold_override: float | None = None,
 ) -> tuple[GeneratedSliderHitObject, tuple[int, int], float] | None:
     """Build a slider object from a circle and slider candidate."""
     if not hasattr(circle_obj, "x") or not hasattr(circle_obj, "y"):
@@ -403,7 +413,8 @@ def _build_slider(
         flow_out_deg=flow_out_deg,
     )
 
-    if quality.overall < config.quality_threshold:
+    effective_threshold = quality_threshold_override if quality_threshold_override is not None else config.quality_threshold
+    if quality.overall < effective_threshold:
         return None
 
     return (
