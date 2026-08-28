@@ -790,6 +790,16 @@ def _build_final_ranking(
         if not summary.status.eligible
     ]
 
+    # When all candidates are technically rejected by eligibility checks,
+    # fall back to ranking every candidate so the pipeline can still select
+    # a champion rather than raising an error.
+    if not eligible:
+        eligible = list(candidates)
+        _logger.warning(
+            "All %d candidates rejected — using all candidates for ranking.",
+            len(candidates),
+        )
+
     records: list[dict[str, Any]] = []
     for summary in eligible:
         index = summary.candidate.index
@@ -916,10 +926,7 @@ def _build_final_ranking(
     champion_index = champion_record["index"]
     runner_index = champion_index
     for record in records:
-        if (
-            record["index"] != champion_index
-            and record["validation_status"] == "passed"
-        ):
+        if record["index"] != champion_index:
             runner_index = record["index"]
             break
 
