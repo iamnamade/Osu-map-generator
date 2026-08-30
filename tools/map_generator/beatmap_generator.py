@@ -163,6 +163,7 @@ def generate_beatmap_from_analysis(
         seed,
         variation=effective_variation,
         pattern_config=pattern_config or build_pattern_config(preset),
+        analysis=analysis,
     )
 
     # Phase 11: Slider Intelligence

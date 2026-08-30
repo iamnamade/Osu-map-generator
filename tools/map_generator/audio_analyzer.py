@@ -5,8 +5,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from .models import AudioAnalysis, EnergyFrame, EnergyRegion, TimedStrength
-from .utils import MapGeneratorError, ensure_existing_file, is_ffmpeg_available, round_ms
+from .models import AudioAnalysis, EnergyFrame, EnergyRegion, KiaiSection, TimedStrength
+from .utils import MapGeneratorError, clamp, ensure_existing_file, is_ffmpeg_available, round_ms
 
 ANALYSIS_SAMPLE_RATE = 22_050
 FRAME_LENGTH = 2_048
@@ -86,6 +86,7 @@ def analyze_audio(audio_path: Path) -> AudioAnalysis:
     )
     quiet_regions = _detect_regions(energy_frames, threshold=0.18, mode="quiet")
     high_energy_regions = _detect_regions(energy_frames, threshold=0.68, mode="high")
+    kiai_sections = _detect_kiai_sections(energy_frames, beats, duration_ms)
     offset_ms = _estimate_offset_ms(beats, onsets, energy_frames)
 
     # Enhanced features: compute spectral flux, multi-band onsets, local BPM
@@ -110,6 +111,7 @@ def analyze_audio(audio_path: Path) -> AudioAnalysis:
         high_energy_regions=high_energy_regions,
         analysis_version=2,
         enhanced=enhanced,
+        kiai_sections=kiai_sections,
     )
 
 
@@ -311,6 +313,86 @@ def _detect_regions(
 
     flush_region()
     return regions
+
+
+def _detect_kiai_sections(
+    energy_frames: list[EnergyFrame],
+    beats: list[TimedStrength],
+    duration_ms: int,
+) -> list[KiaiSection]:
+    """Detect kiai (chorus / high-energy) sections from energy frames.
+
+    A kiai section is a sustained period where the average energy is
+    significantly above the global median, with a minimum duration
+    (~2 beats) and a confidence score derived from peak vs. median ratio.
+    """
+    if not energy_frames or len(energy_frames) < 10:
+        return []
+
+    values = [f.value for f in energy_frames]
+    median_energy = float(np.median(values))
+    if median_energy < 0.05:
+        return []
+
+    # Minimum energy threshold: 1.3x the median to qualify as "high"
+    high_threshold = median_energy * 1.3
+    # Minimum section duration: ~2 beats at typical BPM (~1600ms)
+    min_section_ms = 1600
+    # Merge gap: sections closer than this are merged
+    merge_gap_ms = 800
+
+    # Find contiguous runs above threshold
+    runs: list[tuple[int, int, list[float]]] = []
+    current_start: int | None = None
+    current_values: list[float] = []
+
+    for frame in energy_frames:
+        if frame.value >= high_threshold:
+            if current_start is None:
+                current_start = frame.time_ms
+                current_values = []
+            current_values.append(frame.value)
+        else:
+            if current_start is not None:
+                runs.append((current_start, frame.time_ms, current_values))
+                current_start = None
+                current_values = []
+
+    if current_start is not None and current_values:
+        runs.append((current_start, energy_frames[-1].time_ms, current_values))
+
+    # Merge runs that are close together
+    merged_runs: list[tuple[int, int, list[float]]] = []
+    for run in runs:
+        if merged_runs and run[0] - merged_runs[-1][1] <= merge_gap_ms:
+            prev = merged_runs[-1]
+            merged_runs[-1] = (
+                prev[0],
+                run[1],
+                prev[2] + run[2],
+            )
+        else:
+            merged_runs.append(run)
+
+    # Filter by minimum duration and build KiaiSection objects
+    sections: list[KiaiSection] = []
+    for start_ms, end_ms, vals in merged_runs:
+        duration = end_ms - start_ms
+        if duration < min_section_ms:
+            continue
+        avg_energy = float(np.mean(vals))
+        peak_energy = float(np.max(vals))
+        # Confidence: ratio of peak to median, clamped to [0, 1]
+        confidence = clamp((peak_energy / max(median_energy, 0.01) - 1.0) / 2.0, 0.0, 1.0)
+        sections.append(KiaiSection(
+            start_ms=start_ms,
+            end_ms=end_ms,
+            peak_energy=round(peak_energy, 4),
+            average_energy=round(avg_energy, 4),
+            confidence=round(confidence, 4),
+        ))
+
+    return sections
 
 
 def _estimate_offset_ms(

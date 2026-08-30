@@ -48,6 +48,32 @@ class EnergyRegion:
 
 
 @dataclass(frozen=True)
+class KiaiSection:
+    """A detected high-energy / chorus section eligible for Kiai time."""
+
+    start_ms: int
+    end_ms: int
+    peak_energy: float
+    average_energy: float
+    confidence: float
+
+    def contains(self, time_ms: int) -> bool:
+        return self.start_ms <= time_ms <= self.end_ms
+
+    def duration_ms(self) -> int:
+        return self.end_ms - self.start_ms
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "startMs": self.start_ms,
+            "endMs": self.end_ms,
+            "peakEnergy": round(self.peak_energy, 4),
+            "averageEnergy": round(self.average_energy, 4),
+            "confidence": round(self.confidence, 4),
+        }
+
+
+@dataclass(frozen=True)
 class AudioAnalysis:
     audio_filename: str
     duration_ms: int
@@ -61,6 +87,7 @@ class AudioAnalysis:
     high_energy_regions: list[EnergyRegion]
     analysis_version: int = 1
     enhanced: dict[str, Any] | None = None
+    kiai_sections: list[KiaiSection] = field(default_factory=list)
 
     def energy_at(self, time_ms: int) -> float:
         if not self.energy_frames:
@@ -77,6 +104,16 @@ class AudioAnalysis:
 
     def in_high_energy_region(self, time_ms: int) -> bool:
         return any(region.contains(time_ms) for region in self.high_energy_regions)
+
+    def in_kiai_section(self, time_ms: int) -> bool:
+        return any(kiai.contains(time_ms) for kiai in self.kiai_sections)
+
+    def kiai_confidence_at(self, time_ms: int) -> float:
+        """Return the confidence of the kiai section at this time, or 0.0."""
+        for kiai in self.kiai_sections:
+            if kiai.contains(time_ms):
+                return kiai.confidence
+        return 0.0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -98,6 +135,8 @@ class AudioAnalysis:
                 "highEnergyRegions": [region.to_dict() for region in self.high_energy_regions],
             },
         }
+        if self.kiai_sections:
+            payload["kiaiSections"] = [k.to_dict() for k in self.kiai_sections]
         if self.enhanced:
             payload["enhanced"] = self.enhanced
         return payload
