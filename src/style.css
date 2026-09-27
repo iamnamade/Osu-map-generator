@@ -1,0 +1,564 @@
+:root {
+  color-scheme: dark;
+  --bg: #04080f;
+  --panel: #0d1624;
+  --panel-strong: #121d2f;
+  --line: #233c59;
+  --line-soft: rgba(130, 176, 219, 0.18);
+  --text: #f5f7fb;
+  --muted: #9fb1c9;
+  --accent: #57e7c6;
+  --accent-strong: #1cbf9b;
+  --warm: #ff8c63;
+  --danger: #ff6487;
+  --shadow: 0 26px 70px rgba(0, 0, 0, 0.42);
+  font-family: Bahnschrift, "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(87, 231, 198, 0.12), transparent 26%),
+    radial-gradient(circle at bottom right, rgba(255, 140, 99, 0.1), transparent 24%),
+    linear-gradient(145deg, #02050c 0%, #07101a 44%, #040910 100%);
+  color: var(--text);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+#app {
+  min-height: 100vh;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-shell {
+  width: min(1180px, 100%);
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.info-panel,
+.stage-panel {
+  background: linear-gradient(180deg, rgba(17, 28, 43, 0.96), rgba(10, 17, 29, 0.96));
+  border: 1px solid var(--line-soft);
+  border-radius: 30px;
+  box-shadow: var(--shadow);
+}
+
+.info-panel {
+  padding: 24px;
+  display: grid;
+  gap: 22px;
+}
+
+.brand-lockup h1,
+.meta-panel h2,
+.overlay-card h2 {
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.subtitle,
+.meta-copy,
+.overlay-card p,
+.stage-note,
+.rules-panel li {
+  color: var(--muted);
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.78rem;
+}
+
+.meta-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(12, 23, 38, 0.72);
+  border: 1px solid var(--line-soft);
+}
+
+.status-pill {
+  padding: 8px 12px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  background: rgba(159, 177, 201, 0.16);
+  color: var(--text);
+}
+
+.status-pill[data-state="ready"] {
+  background: rgba(87, 231, 198, 0.18);
+  color: var(--accent);
+}
+
+.status-pill[data-state="playing"] {
+  background: rgba(116, 183, 255, 0.18);
+  color: #74b7ff;
+}
+
+.status-pill[data-state="finished"] {
+  background: rgba(255, 140, 99, 0.18);
+  color: var(--warm);
+}
+
+.status-pill[data-state="error"] {
+  background: rgba(255, 100, 135, 0.18);
+  color: var(--danger);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.stat-card,
+.map-select-panel,
+.quality-panel,
+.tournament-panel,
+.timeline-panel,
+.rules-panel {
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(12, 23, 38, 0.62);
+  border: 1px solid var(--line-soft);
+}
+
+.map-select-panel h2 {
+  margin: 0;
+}
+
+.quality-panel h2,
+.tournament-panel h2,
+.quality-issues-head h3,
+.quality-score-copy h3 {
+  margin: 0;
+}
+
+.quality-content {
+  margin-top: 16px;
+}
+
+.tournament-panel .quality-content {
+  margin-top: 16px;
+}
+
+.quality-empty-state {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(7, 14, 23, 0.84);
+  border: 1px solid var(--line-soft);
+}
+
+.quality-empty-state strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.quality-empty-state p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.quality-score-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.quality-score-badge,
+.quality-summary-card,
+.quality-category-card {
+  border-radius: 18px;
+  background: rgba(7, 14, 23, 0.84);
+  border: 1px solid var(--line-soft);
+}
+
+.quality-score-badge {
+  min-width: 92px;
+  padding: 14px;
+  text-align: center;
+}
+
+.quality-score-badge strong {
+  display: block;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.quality-score-badge span,
+.quality-summary-card span,
+.quality-category-card span,
+.quality-issues-head span,
+.quality-issue-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.quality-score-copy p {
+  margin: 8px 0 0;
+}
+
+.quality-summary-grid,
+.quality-category-grid {
+  margin-top: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.quality-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.quality-category-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.quality-summary-card,
+.quality-category-card {
+  padding: 12px 14px;
+}
+
+.quality-summary-card strong,
+.quality-category-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.05rem;
+}
+
+.quality-issues-block {
+  margin-top: 16px;
+}
+
+.quality-issues-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.quality-issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.quality-issue-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(7, 14, 23, 0.84);
+  border: 1px solid var(--line-soft);
+}
+
+.quality-issue-item p {
+  margin: 4px 0 6px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.tournament-rank-item strong {
+  display: block;
+}
+
+.severity-pill {
+  padding: 6px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: rgba(159, 177, 201, 0.16);
+}
+
+.severity-pill[data-severity="info"] {
+  color: #8dc5ff;
+  background: rgba(141, 197, 255, 0.15);
+}
+
+.severity-pill[data-severity="warning"] {
+  color: #ffd27d;
+  background: rgba(255, 210, 125, 0.15);
+}
+
+.severity-pill[data-severity="error"] {
+  color: var(--warm);
+  background: rgba(255, 140, 99, 0.16);
+}
+
+.severity-pill[data-severity="critical"] {
+  color: var(--danger);
+  background: rgba(255, 100, 135, 0.16);
+}
+
+.select-label {
+  display: block;
+  margin: 16px 0 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.78rem;
+}
+
+.map-select {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(6, 13, 22, 0.92);
+  color: var(--text);
+  padding: 14px 16px;
+  outline: none;
+}
+
+.map-select:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.stat-card strong {
+  display: block;
+  font-size: clamp(1.4rem, 2.4vw, 2rem);
+  margin-top: 8px;
+}
+
+.stat-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.78rem;
+}
+
+.timeline-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  color: var(--muted);
+}
+
+.progress-track {
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.progress-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent) 0%, #74b7ff 50%, var(--warm) 100%);
+  transition: width 90ms linear;
+}
+
+.rules-panel ul {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.stage-panel {
+  padding: 20px;
+}
+
+.game-shell {
+  position: relative;
+  min-height: 460px;
+  border-radius: 28px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  background:
+    radial-gradient(circle at top, rgba(87, 231, 198, 0.08), transparent 30%),
+    linear-gradient(180deg, rgba(9, 16, 26, 0.96), rgba(5, 10, 17, 0.96));
+}
+
+.game-host {
+  width: 100%;
+  min-height: 460px;
+}
+
+.game-host canvas {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+  margin: 0 auto;
+}
+
+.screen-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 8, 15, 0.62);
+  backdrop-filter: blur(8px);
+}
+
+.screen-overlay.hidden {
+  display: none;
+}
+
+.overlay-card {
+  width: min(430px, 100%);
+  padding: 28px;
+  border-radius: 26px;
+  background: rgba(10, 18, 29, 0.94);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.overlay-card p {
+  margin-top: 10px;
+  line-height: 1.6;
+}
+
+.overlay-action-row {
+  margin-top: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.action-button {
+  border: none;
+  border-radius: 999px;
+  padding: 14px 22px;
+  background: linear-gradient(120deg, var(--accent) 0%, var(--accent-strong) 100%);
+  color: #041018;
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+  box-shadow: 0 14px 28px rgba(28, 191, 155, 0.28);
+}
+
+.action-button:hover {
+  transform: translateY(-1px);
+}
+
+.action-button:active {
+  transform: translateY(0);
+}
+
+.secondary-button {
+  background: linear-gradient(120deg, #2d4667 0%, #47678f 100%);
+  color: var(--text);
+  box-shadow: 0 14px 28px rgba(37, 64, 96, 0.28);
+}
+
+.results-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  text-align: left;
+}
+
+.results-grid div {
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(15, 28, 44, 0.78);
+  border: 1px solid var(--line-soft);
+}
+
+.results-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.results-grid strong {
+  font-size: 1.12rem;
+}
+
+.error-card {
+  border-color: rgba(255, 100, 135, 0.4);
+}
+
+.stage-note {
+  margin: 14px 8px 0;
+}
+
+@media (max-width: 920px) {
+  #app {
+    padding: 16px;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .info-panel {
+    order: 2;
+  }
+
+  .stage-panel {
+    order: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  .info-panel,
+  .stage-panel {
+    border-radius: 24px;
+  }
+
+  .stat-grid,
+  .results-grid,
+  .quality-summary-grid,
+  .quality-category-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .game-shell,
+  .game-host {
+    min-height: 320px;
+  }
+
+  .quality-score-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "fileFormatVersion": 14,
+  "creatorDefault": "osu-map-ai",
+  "generalDefaults": {
+    "audioLeadIn": 0,
+    "previewTime": -1,
+    "countdown": 0,
+    "sampleSet": "Normal",
+    "stackLeniency": 0.7,
+    "mode": 0,
+    "letterboxInBreaks": 0,
+    "specialStyle": 0,
+    "widescreenStoryboard": 1,
+    "samplesMatchPlaybackRate": 0
+  },
+  "editorDefaults": {
+    "distanceSpacing": 1.0,
+    "beatDivisor": 4,
+    "gridSize": 4,
+    "timelineZoom": 1.0
+  },
+  "timingDefaults": {
+    "meter": 4,
+    "sampleSetId": 1,
+    "sampleIndex": 0,
+    "volume": 70,
+    "uninherited": 1,
+    "effects": 0
+  },
+  "difficultyDefaults": {
+    "sliderMultiplier": 1.4,
+    "sliderTickRate": 1.0
+  },
+  "circleSizeFormula": {
+    "radiusBase": 54.4,
+    "radiusStep": 4.48,
+    "minimum": 0,
+    "maximum": 10
+  },
+  "approachRateFormula": {
+    "minimum": 0,
+    "maximum": 10,
+    "slowReferenceMs": 1800,
+    "slowPivotMs": 1200,
+    "slowStepMsPerAr": 120,
+    "fastPivotMs": 1200,
+    "fastStepMsPerAr": 150
+  },
+  "difficultyPresets": {
+    "easy": {
+      "hpDrainRate": 4.0,
+      "overallDifficulty": 4.0
+    },
+    "normal": {
+      "hpDrainRate": 5.5,
+      "overallDifficulty": 5.5
+    },
+    "hard": {
+      "hpDrainRate": 7.0,
+      "overallDifficulty": 7.0
+    }
+  },
+  "deterministicArchive": {
+    "year": 2020,
+    "month": 1,
+    "day": 1,
+    "hour": 0,
+    "minute": 0,
+    "second": 0
+  }
+}

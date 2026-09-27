@@ -1,0 +1,6 @@
+-r ../map_generator/requirements.txt
+fastapi
+uvicorn
+python-multipart
+mutagen
+httpx

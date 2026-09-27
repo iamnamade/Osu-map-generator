@@ -1,0 +1,26 @@
+# Node / build
+node_modules/
+dist/
+
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+
+# Local tooling state
+.agents/
+.codex/
+.freebuff/
+desktop.ini
+
+# Temp / debug scratch dirs
+.tmp-*/
+**/.tmp-*/
+
+# Runtime output (generated artifacts, not source)
+public/
+workspaces/
+exports/
+
+# OS junk
+Thumbs.db

@@ -10,6 +10,7 @@ import numpy as np
 from dataclasses import replace as replace_dataclass
 
 from .audio_analyzer import analyze_audio
+from ..text_utils import normalize_unicode_text
 from .config import DifficultyPreset, get_difficulty_preset
 from .event_selector import select_events
 from .generation_config import build_pattern_config
@@ -51,6 +52,8 @@ def generate_beatmap(
     analysis_output_path: Path | None,
     project_root: Path,
     browser_audio_path_override: str | None = None,
+    title_unicode: str | None = None,
+    artist_unicode: str | None = None,
 ) -> GenerationResult:
     """Run analysis, select events, place circles, validate, and export JSON."""
 
@@ -85,6 +88,8 @@ def generate_beatmap(
         raw_samples=samples,
         raw_sample_rate=sample_rate,
         existing_warnings=generation_warnings,
+        title_unicode=title_unicode,
+        artist_unicode=artist_unicode,
     )
 
 
@@ -111,6 +116,8 @@ def generate_beatmap_from_analysis(
     raw_sample_rate: int | None = None,
     phrase_info: list[Any] | None = None,
     existing_warnings: list[str] | None = None,
+    title_unicode: str | None = None,
+    artist_unicode: str | None = None,
 ) -> GenerationResult:
     preset = preset or get_difficulty_preset(difficulty)
     generation_warnings: list[str] = list(existing_warnings) if existing_warnings else []
@@ -406,7 +413,24 @@ def generate_beatmap_from_analysis(
     if analysis_output_path is not None:
         write_json(analysis_output_path, analysis.to_dict())
 
-    write_json(output_path, beatmap.to_dict())
+    beatmap_payload = beatmap.to_dict()
+    # Persist Unicode metadata under the same ``osu`` extra_fields namespace the
+    # importer/exporter use, so generated maps round-trip TitleUnicode /
+    # ArtistUnicode into exported .osu headers (I1).
+    unicode_metadata = {
+        key: normalize_unicode_text(value).strip()
+        for key, value in (
+            ("titleUnicode", title_unicode),
+            ("artistUnicode", artist_unicode),
+        )
+        if isinstance(value, str) and value.strip()
+    }
+    if unicode_metadata:
+        existing_osu = beatmap_payload.get("osu")
+        merged_osu = dict(existing_osu) if isinstance(existing_osu, dict) else {}
+        merged_osu.update(unicode_metadata)
+        beatmap_payload["osu"] = merged_osu
+    write_json(output_path, beatmap_payload)
 
     diagnostics = _build_diagnostics(
         objects=positioned.objects,
