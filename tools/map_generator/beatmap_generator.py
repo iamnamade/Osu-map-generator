@@ -640,114 +640,110 @@ def _enforce_density_minimum(
 ) -> PositionGenerationResult:
     """Enforce minimum object density by injecting bridging fill objects.
 
-    If the current object count is below the density target for the audio
-    duration, inject 1/2-beat bridging circles and sliders to maintain
-    map flow. This prevents the map from feeling empty even when onset
-    confidence is low.
+    The Phase 24 knobs are two authorities: ``min_density_target`` is a hard
+    floor the map must reach, and ``target_density`` is the aim. ``target_count``
+    is the larger of the two, so the floor is never collapsed by a smaller
+    target. When the current object count is below it, circles are injected in
+    a multi-pass, roomiest-gap-first sweep at musical subdivisions until the
+    target is met or no admissible gap remains. Spinner entry/recovery buffers
+    are honoured so fills never crowd a spinner.
     """
-    if preset.min_density_target <= 0:
+    if preset.min_density_target <= 0 and preset.target_density <= 0:
         return positioned
 
     duration_sec = analysis.duration_ms / 1000.0
-    target_count = int(preset.min_density_target * duration_sec)
-    target_count = max(target_count, int(preset.target_density * duration_sec) if preset.target_density > 0 else target_count)
-    current_count = len(positioned.objects)
+    floor_count = (
+        int(math.ceil(preset.min_density_target * duration_sec))
+        if preset.min_density_target > 0
+        else 0
+    )
+    aim_count = (
+        int(math.ceil(preset.target_density * duration_sec))
+        if preset.target_density > 0
+        else 0
+    )
+    target_count = max(floor_count, aim_count)
 
-    if current_count >= target_count:
+    objects = list(positioned.objects)
+    if len(objects) >= target_count:
         return positioned
 
-    deficit = target_count - current_count
-    objects = list(positioned.objects)
+    deficit = target_count - len(objects)
     rng = random.Random(seed + 9999)
 
-    # Build existing time set for conflict avoidance
-    existing_times = {obj.time for obj in objects}
+    min_gap = max(1, preset.min_gap_ms)
+    bpm = analysis.bpm if getattr(analysis, 'bpm', 0) and analysis.bpm > 0 else 120.0
+    beat_interval_ms = max(1, int(round(60000.0 / bpm)))
+    half_beat_ms = max(1, beat_interval_ms // 2)
+    offset_ms = int(getattr(analysis, 'offset_ms', 0) or 0)
 
-    # Determine the beat interval for bridging fill (1/2 beat grid)
-    bpm = analysis.bpm if analysis.bpm > 0 else 120.0
-    beat_interval_ms = int(round(60000.0 / bpm))
-    half_beat_ms = beat_interval_ms // 2
-
-    # Find the biggest gaps to fill
-    sorted_objs = sorted(objects, key=lambda o: o.time)
-    gaps: list[tuple[int, int, int, int]] = []  # (gap_ms, gap_start, gap_end, index)
-    for i in range(len(sorted_objs) - 1):
-        end_i = getattr(sorted_objs[i], 'end_time', None) or sorted_objs[i].time
-        start_next = sorted_objs[i + 1].time
-        gap = start_next - end_i
-        if gap >= half_beat_ms * 2:  # at least 1 beat gap
-            gaps.append((gap, int(end_i), start_next, i))
-
-    gaps.sort(key=lambda g: -g[0])  # biggest gaps first
+    spinner_entry_ms = max(min_gap, int(getattr(preset, 'spinner_entry_buffer_ms', min_gap)))
+    spinner_recovery_ms = max(min_gap, int(getattr(preset, 'spinner_recovery_after_ms', min_gap)))
 
     injected = 0
-    for gap_ms, gap_start, gap_end, _idx in gaps:
-        if injected >= deficit:
+    guard = 0
+    max_rounds = max(1, deficit * 4)
+    # Multi-pass fill: each round inserts one circle into the roomiest gap that
+    # can still host it, so we add no more objects than needed and never
+    # over-saturate an already-dense region.
+    while injected < deficit and guard < max_rounds:
+        guard += 1
+        sorted_objs = sorted(objects, key=lambda o: (o.time, o.id))
+        best: tuple[float, int, Any, Any] | None = None
+        for i in range(len(sorted_objs) - 1):
+            prev_obj = sorted_objs[i]
+            next_obj = sorted_objs[i + 1]
+            prev_end = _density_object_end(prev_obj)
+            lo = prev_end + (spinner_recovery_ms if prev_obj.type == "spinner" else min_gap)
+            hi = next_obj.time - (spinner_entry_ms if next_obj.type == "spinner" else min_gap)
+            if hi <= lo:
+                continue
+            fill = _snap_fill_time((lo + hi) / 2.0, lo, hi, offset_ms, half_beat_ms)
+            if fill is None:
+                continue
+            room = hi - lo
+            if best is None or room > best[0]:
+                best = (float(room), fill, prev_obj, next_obj)
+
+        if best is None:
             break
 
-        # Fill the gap with 1/2-beat bridging objects
-        fill_time = gap_start + half_beat_ms
-        while fill_time < gap_end - half_beat_ms and injected < deficit:
-            if fill_time in existing_times:
-                fill_time += half_beat_ms
-                continue
+        _room, fill_time, prev_obj, next_obj = best
+        energy = analysis.energy_at(fill_time)
 
-            # Check minimum gap constraint
-            prev_time = objects[objects.index(sorted_objs[_idx])].time if _idx < len(objects) else 0
-            next_obj = sorted_objs[_idx + 1] if _idx + 1 < len(sorted_objs) else None
-            if next_obj is not None and (next_obj.time - fill_time) < preset.min_gap_ms:
-                fill_time += half_beat_ms
-                continue
-            if (fill_time - prev_time) < preset.min_gap_ms:
-                fill_time += half_beat_ms
-                continue
+        # Interpolate position between neighbours with a perpendicular offset
+        # for variety; fall back to a random slot when a neighbour is a spinner.
+        if prev_obj.type != "spinner" and next_obj.type != "spinner":
+            px = getattr(prev_obj, 'x', 256)
+            py = getattr(prev_obj, 'y', 192)
+            nx = getattr(next_obj, 'x', 256)
+            ny = getattr(next_obj, 'y', 192)
+            span = max(1, next_obj.time - prev_obj.time)
+            t_frac = clamp((fill_time - prev_obj.time) / span, 0.0, 1.0)
+            angle = rng.uniform(0.0, math.pi * 2)
+            offset = preset.min_jump_distance * 0.5
+            x = int(clamp(px + (nx - px) * t_frac + math.cos(angle) * offset, 32, 480))
+            y = int(clamp(py + (ny - py) * t_frac + math.sin(angle) * offset, 32, 352))
+        else:
+            x = rng.randint(64, 448)
+            y = rng.randint(64, 320)
 
-            # Determine energy at this time for strength
-            energy = analysis.energy_at(fill_time)
-            strength = 0.25 + energy * 0.4
-
-            # Interpolate position between neighbors
-            prev_obj = sorted_objs[_idx] if _idx < len(objects) else None
-            if prev_obj is not None and next_obj is not None:
-                px = getattr(prev_obj, 'x', 256)
-                py = getattr(prev_obj, 'y', 192)
-                nx = getattr(next_obj, 'x', 256)
-                ny = getattr(next_obj, 'y', 192)
-                t_frac = (fill_time - prev_obj.time) / max(1, next_obj.time - prev_obj.time)
-                t_frac = clamp(t_frac, 0.0, 1.0)
-                # Add perpendicular offset for variety
-                angle = rng.uniform(0.0, math.pi * 2)
-                offset = preset.min_jump_distance * 0.5
-                x = int(clamp(px + (nx - px) * t_frac + math.cos(angle) * offset, 32, 480))
-                y = int(clamp(py + (ny - py) * t_frac + math.sin(angle) * offset, 32, 352))
-            else:
-                x = rng.randint(64, 448)
-                y = rng.randint(64, 320)
-
-            new_obj = GeneratedCircleHitObject(
+        objects.append(
+            GeneratedCircleHitObject(
                 id=0,
                 type="circle",
                 x=x,
                 y=y,
-                time=fill_time,
+                time=int(fill_time),
                 extra_fields={
                     "source": "density_fill",
                     "energy": round(energy, 4),
                 },
             )
+        )
+        injected += 1
 
-            insert_pos = 0
-            for j, obj in enumerate(objects):
-                if obj.time > fill_time:
-                    insert_pos = j
-                    break
-            else:
-                insert_pos = len(objects)
-
-            objects.insert(insert_pos, new_obj)
-            existing_times.add(fill_time)
-            injected += 1
-            fill_time += half_beat_ms
+    objects.sort(key=lambda o: (o.time, o.id))
 
     # Renumber IDs
     for idx, obj in enumerate(objects, start=1):
@@ -774,6 +770,39 @@ def _enforce_density_minimum(
         objects=objects,
         rejected_candidates=positioned.rejected_candidates,
     )
+
+
+def _density_object_end(obj: Any) -> int:
+    """Return the last millisecond an object occupies (start for circles)."""
+    end_time = getattr(obj, 'end_time', None)
+    if end_time is None:
+        return int(obj.time)
+    return int(max(int(obj.time), int(end_time)))
+
+
+def _snap_fill_time(
+    center: float,
+    lo: float,
+    hi: float,
+    offset_ms: int,
+    half_beat_ms: int,
+) -> int | None:
+    """Snap ``center`` to the nearest half-beat grid point inside [lo, hi].
+
+    Prefers a musical anchor but falls back to the raw midpoint when no grid
+    point fits the admissible window. Returns ``None`` when the window is empty.
+    """
+    if hi < lo:
+        return None
+    if half_beat_ms > 0:
+        k = round((center - offset_ms) / half_beat_ms)
+        for delta in (0, 1, -1, 2, -2):
+            cand = offset_ms + (k + delta) * half_beat_ms
+            if lo <= cand <= hi:
+                return int(cand)
+    if lo <= center <= hi:
+        return int(round(center))
+    return None
 
 
 def _merge_position_variations(

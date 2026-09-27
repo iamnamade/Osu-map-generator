@@ -35,8 +35,20 @@ def compute_spinner_window(
     """
     min_ms = min_duration_ms if min_duration_ms is not None else preset.spinner_min_duration_ms
     max_ms = max_duration_ms if max_duration_ms is not None else preset.spinner_max_duration_ms
-    recovery = recovery_after_ms if recovery_after_ms is not None else preset.spinner_recovery_after_ms
-    entry = entry_buffer_ms if entry_buffer_ms is not None else preset.spinner_entry_buffer_ms
+    # The spinner must also respect the preset's global min gap (start-to-start
+    # against the previous object and spinner-start-to-next-object), otherwise
+    # the rhythm validator flags RHYTHM_GAP_BELOW_MINIMUM.
+    min_gap = max(0, int(getattr(preset, 'min_gap_ms', 0)))
+    recovery = (
+        recovery_after_ms
+        if recovery_after_ms is not None
+        else max(preset.spinner_recovery_after_ms, min_gap)
+    )
+    entry = (
+        entry_buffer_ms
+        if entry_buffer_ms is not None
+        else max(preset.spinner_entry_buffer_ms, min_gap)
+    )
 
     available = gap_end_ms - gap_start_ms
     if available < min_ms + recovery + entry:

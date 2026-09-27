@@ -378,6 +378,12 @@ def _select_by_density_and_gap(
             selected.append(t)
         elif candidate.confidence >= config.min_timing_confidence:
             selected.append(t)
+            # The accepted event still advances the gap reference: without
+            # this the next candidate is measured against a stale last_time,
+            # which can admit events closer than min_gap.
+            last_time = t
+            if len(selected) >= config.max_timings:
+                break
             continue
 
         last_time = t

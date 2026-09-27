@@ -240,6 +240,11 @@ def process_spinners(
         # Recount diagnostics
         diagnostics.accepted_spinners = len(accepted_starts)
 
+    # Final safety net: drop any spinner that still crowds or overlaps another
+    # object (natural or forced), so no SPINNER_OVERLAPS_* issue can escape.
+    accepted_starts = _prune_conflicting_spinners(accepted_starts, objects, preset)
+    diagnostics.accepted_spinners = len(accepted_starts)
+
     if not accepted_starts:
         # Still report the fatigue/harmony context even when no spinner was
         # accepted so diagnostics stay complete and deterministic.
@@ -302,7 +307,14 @@ def _force_spinners_for_minimum(
             targets.append(best_gap_start)
 
     forced_count = 0
-    clearance_ms = max(100, preset.spinner_recovery_after_ms // 2)
+    # Use the full RC entry/recovery buffers (not half of recovery) so forced
+    # spinners do not trigger SPINNER_ENTRY/RECOVERY_TOO_TIGHT warnings.
+    clearance_ms = max(
+        getattr(preset, 'min_gap_ms', 0),
+        preset.spinner_entry_buffer_ms,
+        preset.spinner_recovery_after_ms,
+        100,
+    )
     for target_ms in targets:
         if forced_count >= min_needed:
             break
@@ -324,8 +336,15 @@ def _force_spinners_for_minimum(
             if spinner_end - spinner_start < preset.spinner_min_duration_ms:
                 continue
 
+            # Validate against the map objects *and* any spinner already
+            # accepted (natural or forced) so forced placements cannot collide
+            # with an existing spinner.
+            check_objects = sorted(
+                [*sorted_objects, *(obj for _, obj in result)],
+                key=lambda o: o.time,
+            )
             has_clearance = _check_spinner_clearance(
-                sorted_objects, spinner_start, spinner_end, clearance_ms
+                check_objects, spinner_start, spinner_end, clearance_ms
             )
             if not has_clearance:
                 continue
@@ -364,28 +383,66 @@ def _check_spinner_clearance(
     spinner_end: int,
     clearance_ms: int,
 ) -> bool:
-    """Check that no existing object is too close to the spinner boundaries.
+    """Check that no existing object overlaps the padded spinner window.
 
-    Only examines the ~4 nearest objects for O(1) performance in dense maps.
+    An object conflicts when its occupied interval ``[time, end_time]``
+    intersects ``[spinner_start - clearance, spinner_end + clearance]``. This
+    catches sliders and other long objects that *span* the spinner window,
+    which a proximity check against a single boundary would miss.
+
+    ``sorted_objects`` must be sorted by start time; the scan stops at the
+    first object that begins after the padded window.
     """
-    # Find the nearest object to spinner_start
-    best_before_end = None
-    best_after_start = None
+    padded_start = spinner_start - clearance_ms
+    padded_end = spinner_end + clearance_ms
     for obj in sorted_objects:
-        obj_end = _object_end_time(obj)
-        if obj_end <= spinner_start:
-            best_before_end = obj
-        elif obj.time >= spinner_end:
-            best_after_start = obj
+        obj_start = int(obj.time)
+        if obj_start >= padded_end:
             break
-
-    if best_before_end is not None:
-        if spinner_start - _object_end_time(best_before_end) < clearance_ms:
-            return False
-    if best_after_start is not None:
-        if best_after_start.time - spinner_end < clearance_ms:
+        if _object_end_time(obj) > padded_start:
             return False
     return True
+
+
+def _prune_conflicting_spinners(
+    accepted_starts: list[tuple[int, GeneratedSpinnerHitObject]],
+    objects: list[GeneratedHitObject],
+    preset: DifficultyPreset,
+) -> list[tuple[int, GeneratedSpinnerHitObject]]:
+    """Drop spinners that overlap or crowd a neighbouring object.
+
+    Enforces the preset min gap plus spinner entry/recovery buffers against
+    every map object and against other kept spinners. This is a last-resort
+    guard so an accepted spinner can never yield a SPINNER_OVERLAPS_PREVIOUS
+    or SPINNER_RECOVERY_TOO_TIGHT validation issue.
+    """
+    if not accepted_starts:
+        return accepted_starts
+
+    min_gap = max(1, getattr(preset, 'min_gap_ms', 0))
+    entry = max(min_gap, int(getattr(preset, 'spinner_entry_buffer_ms', min_gap)))
+    recovery = max(min_gap, int(getattr(preset, 'spinner_recovery_after_ms', min_gap)))
+
+    base = sorted(objects, key=lambda o: o.time)
+    kept: list[tuple[int, GeneratedSpinnerHitObject]] = []
+    for start, spinner in sorted(accepted_starts, key=lambda item: item[0]):
+        end = int(spinner.end_time)
+        ok = True
+        for other in [*base, *(obj for _, obj in kept)]:
+            other_start = int(other.time)
+            other_end = _object_end_time(other)
+            if other_end > start and other_start < end:
+                ok = False  # direct interval overlap
+                break
+            if other_end <= start and start - other_end < entry:
+                ok = False  # entry buffer violated
+                break
+            if other_start >= end and other_start - end < recovery:
+                ok = False  # recovery buffer violated
+                break
+        if ok:
+            kept.append((start, spinner))
+    return kept
 
 
 def _object_end_time(obj: GeneratedHitObject) -> int:

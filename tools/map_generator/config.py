@@ -67,8 +67,6 @@ class DifficultyPreset:
     # Aggressive density enforcement (Phase 24)
     min_density_target: float = 0.0  # minimum objects/sec (0 = disabled)
     target_density: float = 0.0  # target objects/sec (0 = disabled)
-    max_gap_ms: int = 0  # strict max gap between objects during active audio (0 = disabled)
-    min_slider_ratio: float = 0.0  # minimum fraction of objects that must be sliders (0 = disabled)
     min_spinner_count: int = 0  # minimum spinners to place (0 = disabled)
 
 
@@ -127,8 +125,6 @@ DIFFICULTY_PRESETS: dict[DifficultyName, DifficultyPreset] = {
         # Moderate density enforcement
         min_density_target=0.8,
         target_density=1.2,
-        max_gap_ms=3000,
-        min_slider_ratio=0.15,
         min_spinner_count=1,
     ),
     "normal": DifficultyPreset(
@@ -185,8 +181,6 @@ DIFFICULTY_PRESETS: dict[DifficultyName, DifficultyPreset] = {
         # Aggressive density enforcement
         min_density_target=1.3,
         target_density=1.8,
-        max_gap_ms=2200,
-        min_slider_ratio=0.30,
         min_spinner_count=1,
     ),
     "hard": DifficultyPreset(
@@ -243,8 +237,6 @@ DIFFICULTY_PRESETS: dict[DifficultyName, DifficultyPreset] = {
         # Aggressive density enforcement
         min_density_target=2.2,
         target_density=3.2,
-        max_gap_ms=1800,
-        min_slider_ratio=0.30,
         min_spinner_count=1,
     ),
 }

@@ -211,16 +211,22 @@ def compute_max_allowed_gap(
         return max_gap_ms
 
     avg_energy = float(np.mean(window_energy))
+    # Mean energy alone misses isolated loud bursts (a single accent inside an
+    # otherwise quiet window still demands a tight gap). Blend the mean with
+    # the window peak so transients raise the effective energy without letting
+    # one lone spike completely dominate the decision.
+    peak_energy = float(np.max(window_energy))
+    effective_energy = max(avg_energy, 0.5 * avg_energy + 0.5 * peak_energy)
 
     # During active audio sections (above energy ceiling), gaps must be very
     # tight to prevent dead zones where the player stares at an empty screen.
-    if avg_energy > config.energy_ceiling:
+    if effective_energy > config.energy_ceiling:
         return int(max_gap_ms * 0.35)
     # Above the midpoint: aggressive tightening
-    if avg_energy > config.energy_floor + (config.energy_ceiling - config.energy_floor) * 0.5:
+    if effective_energy > config.energy_floor + (config.energy_ceiling - config.energy_floor) * 0.5:
         return int(max_gap_ms * 0.55)
     # Low energy: still apply a strict cap to avoid long idle gaps
-    if avg_energy > config.energy_floor:
+    if effective_energy > config.energy_floor:
         return int(max_gap_ms * 0.7)
 
     return max_gap_ms
