@@ -8,6 +8,7 @@ import {
 } from "../GeneratorModels";
 import { renderPipelineProgress } from "../components/PipelineProgress";
 import { renderJobLogPanel } from "../components/JobLogPanel";
+import { renderGeneratorWaveform } from "../components/GeneratorWaveform";
 import { escapeHtml } from "../../shared/format";
 import { renderIcon } from "../components/GeneratorIcons";
 
@@ -33,18 +34,7 @@ export function renderGenerationStep(state: GeneratorState): string {
           <h2>Run Local Pipeline</h2>
           <p>Progress is reported from the actual Python stages. No synthetic progress is shown between stage boundaries.</p>
         </div>
-        <div class="generation-waveform" aria-hidden="true">
-          <div class="generation-waveform-grid"></div>
-          <div class="generation-waveform-signal">
-            ${Array.from({ length: 18 }, (_, index) => {
-              const heights = [
-                12, 18, 22, 30, 26, 42, 58, 76, 104, 68, 44, 32, 24, 20, 28, 22,
-                18, 12,
-              ];
-              return `<span style="height:${heights[index]}px"></span>`;
-            }).join("")}
-          </div>
-        </div>
+        ${renderGeneratorWaveform(Boolean(state.workspace?.workspace.audio))}
       </div>
 
       ${renderPipelineProgress({

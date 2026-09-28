@@ -149,9 +149,21 @@ function renderAdvancedSettings(
           <h3>${capitalize(difficulty)}</h3>
           <p>${disabled ? "Enable this difficulty card first." : "Deterministic settings for this output tier."}</p>
         </div>
-        <span class="sidebar-status-badge sidebar-status-badge--${disabled ? "muted" : "success"}">
-          ${disabled ? "Locked" : "Enabled"}
-        </span>
+        <div class="advanced-card-head-actions">
+          <span class="sidebar-status-badge sidebar-status-badge--${disabled ? "muted" : "success"}">
+            ${disabled ? "Locked" : "Enabled"}
+          </span>
+          <button
+            type="button"
+            class="generator-ghost-button advanced-card-copy"
+            data-action="apply-settings-to-all"
+            data-difficulty="${difficulty}"
+            title="Copy these mapping controls to the other selected difficulties"
+            ${disabledAttribute}
+          >
+            Apply To All
+          </button>
+        </div>
       </div>
 
       ${renderPresetPicker(difficulty, settings, disabledAttribute)}

@@ -58,6 +58,21 @@ export class GeneratorApiClient {
     );
   }
 
+  // P1.1: stable server URLs for local previews. Unlike client-side blob URLs
+  // these survive a page reload, so the UI can rebuild the previews on boot.
+  backgroundPreviewUrl(workspaceId: string, filename: string): string {
+    return this.resolvePath(
+      `/workspaces/${encodeURIComponent(workspaceId)}/preview-background/${encodeURIComponent(filename)}`,
+    );
+  }
+
+  // P1.2: the waveform decodes from the same preview endpoint the pipeline uses.
+  audioPreviewUrl(workspaceId: string, filename: string): string {
+    return this.resolvePath(
+      `/workspaces/${encodeURIComponent(workspaceId)}/source-audio/${encodeURIComponent(filename)}`,
+    );
+  }
+
   async updateMetadata(
     workspaceId: string,
     payload: WorkspaceMetadata,

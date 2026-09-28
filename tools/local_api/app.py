@@ -252,6 +252,26 @@ def create_app() -> FastAPI:
             filename=manifest.audio.normalized_filename,
         )
 
+    @app.get(
+        f"{config.api_prefix}/workspaces/{{workspace_id}}"
+        "/preview-background/{filename}"
+    )
+    async def preview_background(workspace_id: str, filename: str):
+        # P1.1: mirror preview_audio so the background preview survives a page
+        # reload instead of relying on a short-lived client-side blob URL.
+        manifest = workspace_manager.load_manifest(workspace_id)
+        if manifest.background is None or filename != manifest.background.normalized_filename:
+            raise LocalApiNotFoundError("Background preview file was not found.")
+        file_path = workspace_manager.resolve_relative_path(
+            workspace_id,
+            manifest.background.relative_path,
+        )
+        return FileResponse(
+            file_path,
+            media_type=manifest.background.content_type,
+            filename=manifest.background.normalized_filename,
+        )
+
     @app.delete(f"{config.api_prefix}/workspaces/{{workspace_id}}")
     async def delete_workspace(workspace_id: str):
         cleanup_service.delete_workspace(workspace_id)

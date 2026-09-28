@@ -1256,6 +1256,18 @@ img {
   margin: 6px 0 0;
 }
 
+.advanced-card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.advanced-card-copy {
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 .advanced-card-grid {
   margin-top: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1437,7 +1449,7 @@ img {
 }
 
 .generation-waveform-grid,
-.generation-waveform-signal {
+.generation-waveform-canvas {
   position: absolute;
   inset: 0;
 }
@@ -1452,19 +1464,21 @@ img {
   opacity: 0.45;
 }
 
-.generation-waveform-signal {
-  display: flex;
-  align-items: end;
-  justify-content: center;
-  gap: 10px;
-  padding: 24px 18px 18px;
+.generation-waveform-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.generation-waveform-signal span {
-  width: 4px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(55, 242, 160, 0.25), rgba(55, 242, 160, 1));
-  box-shadow: 0 0 18px rgba(55, 242, 160, 0.26);
+.generation-waveform-caption {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(55, 242, 160, 0.65);
+  pointer-events: none;
 }
 
 .generation-panel-group {

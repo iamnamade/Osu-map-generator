@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAPPING_PRESETS,
   applyMappingPresetToSettings,
+  applySharedGenerationSettings,
   buildDifficultyPreviewSelection,
   createEmptyDifficultySettings,
   createEmptyMetadataDraft,
@@ -117,6 +118,46 @@ describe("Phase 19 mapping presets", () => {
     expect(toPercent(0.5)).toBe(50);
     expect(toPercent(0.72)).toBe(72);
     expect(toPercent(0)).toBe(0);
+  });
+});
+
+describe("P1.4 apply-to-all difficulty settings", () => {
+  it("copies mapping controls and generation settings to the target", () => {
+    const source = createEmptyDifficultySettings();
+    source.circleDensity = 0.82;
+    source.sliderDensity = 0.31;
+    source.mappingPreset = "technical";
+    source.evolutionPasses = 4;
+    source.replayProfile = "tournament";
+    source.timingVariation = true;
+    source.hybridAssemblyEnabled = false;
+    source.sectionSensitivity = 0.7;
+    source.difficultyTarget = "custom";
+    source.customTargetStar = 5.5;
+
+    const target = { ...createEmptyDifficultySettings(), candidateCount: 12, rootSeed: 777, seedMode: "manual" as const };
+    const merged = applySharedGenerationSettings(source, target);
+
+    expect(merged.circleDensity).toBe(0.82);
+    expect(merged.sliderDensity).toBe(0.31);
+    expect(merged.mappingPreset).toBe("technical");
+    expect(merged.evolutionPasses).toBe(4);
+    expect(merged.replayProfile).toBe("tournament");
+    expect(merged.timingVariation).toBe(true);
+    expect(merged.hybridAssemblyEnabled).toBe(false);
+    expect(merged.sectionSensitivity).toBe(0.7);
+    expect(merged.customTargetStar).toBe(5.5);
+  });
+
+  it("keeps per-tier candidate count and seed untouched", () => {
+    const source = { ...createEmptyDifficultySettings(), candidateCount: 8, rootSeed: 101, seedMode: "auto" as const };
+    const target = { ...createEmptyDifficultySettings(), candidateCount: 12, rootSeed: 777, seedMode: "manual" as const };
+
+    const merged = applySharedGenerationSettings(source, target);
+
+    expect(merged.candidateCount).toBe(12);
+    expect(merged.rootSeed).toBe(777);
+    expect(merged.seedMode).toBe("manual");
   });
 });
 

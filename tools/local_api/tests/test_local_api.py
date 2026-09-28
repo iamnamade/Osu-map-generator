@@ -26,6 +26,9 @@ from tools.local_api.workspace_manager import WorkspaceManager
 # P0.4: uploads are magic-byte verified, so fixtures carry a real ID3v2
 # header (identity/decoding of the payload is mocked where needed).
 VALID_MP3_HEADER = b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\x00" * 64
+# P1.1: background uploads are magic-byte verified too (P0.4), so the preview
+# route fixture needs a real PNG header.
+VALID_PNG_HEADER = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 
 class LocalApiRouteTests(unittest.TestCase):
@@ -169,6 +172,32 @@ class LocalApiRouteTests(unittest.TestCase):
         paths = self.workspace_manager.get_workspace_paths(workspace_id)
         self.assertIsNone(manifest.audio)
         self.assertEqual(list(paths.source_dir.iterdir()), [])
+
+    def test_background_preview_route_serves_uploaded_image(self) -> None:
+        workspace_id = self._create_workspace_id()
+        upload = self.client.post(
+            f"/api/workspaces/{workspace_id}/background",
+            files={"file": ("cover.png", io.BytesIO(VALID_PNG_HEADER), "image/png")},
+        )
+        self.assertEqual(upload.status_code, 200)
+        background = upload.json()["workspace"]["background"]
+        self.assertIsNotNone(background)
+        self.assertEqual(background["normalizedFilename"], "background.png")
+
+        preview = self.client.get(
+            f"/api/workspaces/{workspace_id}/preview-background/"
+            f"{background['normalizedFilename']}"
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.content, VALID_PNG_HEADER)
+        self.assertEqual(preview.headers["content-type"], "image/png")
+
+    def test_background_preview_route_rejects_unknown_filename(self) -> None:
+        workspace_id = self._create_workspace_id()
+        response = self.client.get(
+            f"/api/workspaces/{workspace_id}/preview-background/background.png"
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_invalid_metadata_returns_controlled_422(self) -> None:
         workspace_id = self._create_workspace_id()

@@ -10,22 +10,7 @@ export function renderWaveformTrack(
   context.rect(frame.x, frame.y, frame.width, frame.height);
   context.clip();
 
-  const peaks = state.session.waveform?.peaks;
-  if (peaks && peaks.length > 1) {
-    context.strokeStyle = "#7c4dff";
-    context.lineWidth = 1.2;
-    context.beginPath();
-
-    for (let index = 0; index < peaks.length; index += 1) {
-      const x = frame.x + (index / (peaks.length - 1)) * frame.width;
-      const amplitude = peaks[index];
-      const top = frame.y + frame.height / 2 - amplitude * (frame.height / 2 - 4);
-      const bottom = frame.y + frame.height / 2 + amplitude * (frame.height / 2 - 4);
-      context.moveTo(x, top);
-      context.lineTo(x, bottom);
-    }
-
-    context.stroke();
+  if (renderWaveformPeaks(context, state.session.waveform?.peaks, frame)) {
     context.restore();
     return;
   }
@@ -70,6 +55,40 @@ export interface TimelineFrame {
   height: number;
   visibleStartMs: number;
   visibleEndMs: number;
+}
+
+/**
+ * Draw symmetric waveform peaks inside a frame.
+ *
+ * Shared by the editor timeline and the generator's step-4 waveform preview so
+ * both surfaces render decoded audio through the exact same code path.
+ * Returns ``true`` when peaks were drawn; ``false`` lets the caller fall back
+ * to another visualization (e.g. the editor's energy-frame envelope).
+ */
+export function renderWaveformPeaks(
+  context: CanvasRenderingContext2D,
+  peaks: readonly number[] | undefined,
+  frame: TimelineFrame,
+): boolean {
+  if (!peaks || peaks.length < 2) {
+    return false;
+  }
+
+  context.strokeStyle = "#7c4dff";
+  context.lineWidth = 1.2;
+  context.beginPath();
+
+  for (let index = 0; index < peaks.length; index += 1) {
+    const x = frame.x + (index / (peaks.length - 1)) * frame.width;
+    const amplitude = peaks[index];
+    const top = frame.y + frame.height / 2 - amplitude * (frame.height / 2 - 4);
+    const bottom = frame.y + frame.height / 2 + amplitude * (frame.height / 2 - 4);
+    context.moveTo(x, top);
+    context.lineTo(x, bottom);
+  }
+
+  context.stroke();
+  return true;
 }
 
 export function timeToCanvasX(timeMs: number, frame: TimelineFrame): number {

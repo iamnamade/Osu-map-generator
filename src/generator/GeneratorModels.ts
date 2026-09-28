@@ -548,6 +548,26 @@ export function applyMappingPresetToSettings(
   };
 }
 
+/**
+ * P1.4: copy the shared, tier-agnostic generation settings from one difficulty
+ * onto another so users do not have to re-enter the mapping controls for every
+ * tier. Per-tier values that are intentionally different stay untouched:
+ * ``candidateCount`` (each tier has its own processing budget) and the seed
+ * (``rootSeed``/``seedMode``) so deterministic runs are not silently shared.
+ */
+export function applySharedGenerationSettings(
+  source: DifficultySettings,
+  target: DifficultySettings,
+): DifficultySettings {
+  return {
+    ...target,
+    ...source,
+    candidateCount: target.candidateCount,
+    rootSeed: target.rootSeed,
+    seedMode: target.seedMode,
+  };
+}
+
 export function toPercent(value: number): number {
   return Math.round(value * 100);
 }

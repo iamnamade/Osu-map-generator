@@ -4,6 +4,7 @@ import {
 } from "./GeneratorApiClient";
 import {
   applyMappingPresetToSettings,
+  applySharedGenerationSettings,
   cloneWorkspaceMetadata,
   createInitialFileTransferState,
   createInitialGeneratorState,
@@ -35,6 +36,10 @@ import {
 } from "./GeneratorValidation";
 import { escapeHtml, formatClockTimeMs } from "../shared/format";
 import { renderIcon } from "./components/GeneratorIcons";
+import {
+  computeWaveformPeaks,
+  drawGeneratorWaveform,
+} from "./components/GeneratorWaveform";
 import { renderDifficultyStep } from "./steps/DifficultyStep";
 import { renderGenerationStep } from "./steps/GenerationStep";
 import { renderMetadataStep } from "./steps/MetadataStep";
@@ -93,6 +98,11 @@ export class GeneratorApp {
   private pollTimer: number | null = null;
   private audioDropzoneActive = false;
   private backgroundPreviewUrl: string | null = null;
+  // P1.2: decoded peaks for the step-4 waveform preview (null until decoded).
+  private waveformPeaks: number[] | null = null;
+  // P1.3: while an IME composition is active we defer re-rendering so the
+  // browser keeps ownership of the composition (and its caret) uninterrupted.
+  private isComposing = false;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -100,6 +110,11 @@ export class GeneratorApp {
     this.bindEvents();
     this.unsubscribe = this.store.subscribe((state) => {
       savePersistedGeneratorState(state);
+      // P1.3: hold off rebuilding the DOM during an IME composition so the
+      // browser keeps the in-progress composition (and its caret) intact.
+      if (this.isComposing) {
+        return;
+      }
       this.render(state);
     });
     await this.bootstrap();
@@ -108,6 +123,7 @@ export class GeneratorApp {
   dispose(): void {
     this.stopPolling();
     this.replaceBackgroundPreviewUrl(null);
+    this.waveformPeaks = null;
     this.unsubscribe?.();
   }
 
@@ -150,6 +166,15 @@ export class GeneratorApp {
     this.root.addEventListener("drop", (event) => {
       void this.handleDrop(event);
     });
+    // P1.3: track IME composition globally; every metadata field and control
+    // lives under `root`, so a single pair of delegated listeners suffices.
+    this.root.addEventListener("compositionstart", () => {
+      this.isComposing = true;
+    });
+    this.root.addEventListener("compositionend", () => {
+      this.isComposing = false;
+      this.render(this.store.getState());
+    });
   }
 
   private async bootstrap(): Promise<void> {
@@ -185,6 +210,17 @@ export class GeneratorApp {
       if (!workspace) {
         workspace = await this.api.createWorkspace();
       }
+
+      // P1.1: rebuild the background preview from the server so it survives a
+      // page reload (the previous session-only blob URL is gone by now).
+      this.replaceBackgroundPreviewUrl(
+        workspace.workspace.background
+          ? this.api.backgroundPreviewUrl(
+              workspace.workspace.workspaceId,
+              workspace.workspace.background.normalizedFilename,
+            )
+          : null,
+      );
 
       const metadataDraft = persisted?.metadataDraft
         ? hydrateMetadataDraftFromPersistence(
@@ -233,6 +269,20 @@ export class GeneratorApp {
           persisted?.technicalDetailsExpanded ?? false,
       });
 
+      // P1.2: decode the already-uploaded track so the step-4 waveform renders
+      // even when the wizard is resumed after a reload.
+      const audioFile = workspace.workspace.audio;
+      if (audioFile) {
+        void this.loadWaveformFromUrl(
+          this.api.audioPreviewUrl(
+            workspace.workspace.workspaceId,
+            audioFile.normalizedFilename,
+          ),
+        );
+      } else {
+        this.waveformPeaks = null;
+      }
+
       if (job && !isTerminalJobStatus(job.status)) {
         this.startPolling(job.jobId);
       }
@@ -259,6 +309,9 @@ export class GeneratorApp {
     const statusLabel = resolveModeLabel(state.healthStatus);
     const apiEndpoint = extractApiEndpoint(state.healthMessage);
     const showGlobalBanners = state.currentStep !== "generate";
+    // P1.3: capture the focused control + caret before the wholesale innerHTML
+    // swap and restore them afterwards, so typing (and IME) stays stable.
+    const focusSnapshot = captureFocusSnapshot(this.root);
     this.root.innerHTML = `
       <div class="generator-shell">
         <header class="generator-header">
@@ -363,6 +416,11 @@ export class GeneratorApp {
         ${this.renderFooter()}
       </div>
     `;
+    restoreFocusSnapshot(this.root, focusSnapshot);
+
+    if (state.currentStep === "generate") {
+      this.drawActiveWaveform();
+    }
   }
 
   private renderSidebar(state: GeneratorState): string {
@@ -700,6 +758,15 @@ export class GeneratorApp {
       return;
     }
 
+    if (action === "apply-settings-to-all") {
+      const difficulty = actionTarget.dataset.difficulty as DifficultyName | undefined;
+      if (!difficulty) {
+        return;
+      }
+      this.applySettingsToAllDifficulties(difficulty);
+      return;
+    }
+
     if (action === "jump-step") {
       const targetStep = actionTarget.dataset.step;
       if (
@@ -929,6 +996,8 @@ export class GeneratorApp {
       );
 
       this.replaceBackgroundPreviewUrl(URL.createObjectURL(file));
+      // P1.2: decode the freshly uploaded track into waveform peaks.
+      void this.loadWaveformFromFile(file);
       this.store.update((state) => ({
         ...state,
         workspace: response,
@@ -1288,6 +1357,7 @@ export class GeneratorApp {
         await this.api.deleteWorkspace(currentWorkspaceId);
       }
       this.replaceBackgroundPreviewUrl(null);
+      this.waveformPeaks = null;
       const workspace = await this.api.createWorkspace();
       clearPersistedGeneratorState();
       this.store.setState({
@@ -1350,10 +1420,65 @@ export class GeneratorApp {
   }
 
   private replaceBackgroundPreviewUrl(nextUrl: string | null): void {
-    if (this.backgroundPreviewUrl) {
+    // Only blob URLs need revoking; the P1.1 server preview URLs are plain.
+    if (this.backgroundPreviewUrl?.startsWith("blob:")) {
       URL.revokeObjectURL(this.backgroundPreviewUrl);
     }
     this.backgroundPreviewUrl = nextUrl;
+  }
+
+  private applySettingsToAllDifficulties(source: DifficultyName): void {
+    this.store.update((state) => {
+      const sourceSettings = state.metadataDraft.difficultySettings[source];
+      const nextSettings = { ...state.metadataDraft.difficultySettings };
+      let appliedCount = 0;
+
+      for (const difficulty of state.metadataDraft.selectedDifficulties) {
+        if (difficulty === source) {
+          continue;
+        }
+        nextSettings[difficulty] = applySharedGenerationSettings(
+          sourceSettings,
+          nextSettings[difficulty],
+        );
+        appliedCount += 1;
+      }
+
+      return {
+        ...state,
+        metadataDraft: { ...state.metadataDraft, difficultySettings: nextSettings },
+        errorMessage: undefined,
+        noticeMessage:
+          appliedCount > 0
+            ? `Applied ${capitalize(source)} settings to ${appliedCount} other difficult${appliedCount === 1 ? "y" : "ies"}.`
+            : `Select another difficulty before applying ${capitalize(source)} settings.`,
+      };
+    });
+  }
+
+  private async loadWaveformFromFile(file: File): Promise<void> {
+    const peaks = await computeWaveformPeaks(file);
+    this.waveformPeaks = peaks ?? null;
+    this.drawActiveWaveform();
+  }
+
+  private async loadWaveformFromUrl(url: string): Promise<void> {
+    const peaks = await computeWaveformPeaks(url);
+    this.waveformPeaks = peaks ?? null;
+    this.drawActiveWaveform();
+  }
+
+  private drawActiveWaveform(): void {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const canvas = this.root.querySelector<HTMLCanvasElement>(
+      "canvas[data-role='generator-waveform']",
+    );
+    if (canvas) {
+      drawGeneratorWaveform(canvas, this.waveformPeaks ?? undefined);
+    }
   }
 
   private setCurrentStep(step: WizardStep): void {
@@ -1669,6 +1794,71 @@ function buildJobLogText(job: JobStateResponse | undefined): string {
         `[${event.timestamp}] ${event.level.toUpperCase()} ${event.message}`,
     )
     .join("\n");
+}
+
+interface FocusSnapshot {
+  id: string;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  selectionDirection: "forward" | "backward" | "none" | null;
+}
+
+/**
+ * P1.3: record the focused control and caret so ``render()`` can restore them
+ * after its innerHTML swap. Returns null when nothing relevant is focused.
+ */
+function captureFocusSnapshot(root: HTMLElement): FocusSnapshot | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !active.id || !root.contains(active)) {
+    return null;
+  }
+
+  const selectable = active as HTMLInputElement | HTMLTextAreaElement;
+  const supportsSelection = typeof selectable.selectionStart === "number";
+  return {
+    id: active.id,
+    selectionStart: supportsSelection ? selectable.selectionStart : null,
+    selectionEnd: supportsSelection ? selectable.selectionEnd : null,
+    selectionDirection: supportsSelection ? selectable.selectionDirection : null,
+  };
+}
+
+function restoreFocusSnapshot(
+  root: HTMLElement,
+  snapshot: FocusSnapshot | null,
+): void {
+  if (!snapshot || typeof document === "undefined") {
+    return;
+  }
+
+  const idSelector =
+    typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(snapshot.id)
+      : snapshot.id;
+  const element = root.querySelector<HTMLElement>(`#${idSelector}`);
+  if (!element) {
+    return;
+  }
+
+  element.focus({ preventScroll: true });
+  if (snapshot.selectionStart === null || snapshot.selectionEnd === null) {
+    return;
+  }
+
+  const selectable = element as HTMLInputElement | HTMLTextAreaElement;
+  try {
+    selectable.setSelectionRange(
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.selectionDirection ?? undefined,
+    );
+  } catch {
+    // Some input types (e.g. number) reject selection ranges; focus still wins.
+  }
 }
 
 function canJumpToStep(step: WizardStep, state: GeneratorState): boolean {
