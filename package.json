@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "validate:all": "python tools/validate_all.py",
     "generator:frontend": "vite --host 127.0.0.1",
     "generator:dev": "node scripts/run-local-generator.mjs",
     "generator:test": "node scripts/run-local-generator-tests.mjs",

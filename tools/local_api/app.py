@@ -203,13 +203,14 @@ def create_app() -> FastAPI:
         return job_manager.create_job(workspace_id)
 
     @app.get(f"{config.api_prefix}/jobs/{{job_id}}")
-    async def get_job(job_id: str):
-        return job_manager.get_job(job_id)
+    async def get_job(job_id: str, since: int = 0):
+        """P3.4: ``?since=`` tails the bounded event log (index watermark)."""
+        return job_manager.get_job(job_id, since=max(0, since))
 
     @app.get(f"{config.api_prefix}/jobs/{{job_id}}/events")
-    async def stream_job_events(job_id: str):
+    async def stream_job_events(job_id: str, since: int = 0):
         return StreamingResponse(
-            job_manager.stream_events(job_id),
+            job_manager.stream_events(job_id, since=max(0, since)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )

@@ -11,14 +11,30 @@ Covers:
 
 from __future__ import annotations
 
+import importlib
 import sys
 import unittest
 from dataclasses import replace
 from unittest.mock import MagicMock
 
-# Stub heavy audio dependencies before importing the generator package.
-for _mod in ("librosa", "soundfile"):
-    sys.modules.setdefault(_mod, MagicMock())
+# Stub heavy audio dependencies before importing the generator package, and
+# restore them again as soon as the imports below finish. Only modules that
+# are genuinely absent get stubbed: real librosa loads submodules lazily, so
+# shadowing an *importable* soundfile with a MagicMock makes the lazy
+# ``librosa.core.audio`` import bind the fake ("isinstance() arg 2 must be a
+# type") and poisons audio tests for the rest of the process.
+_STUBBED_MODULE_NAMES = ("librosa", "soundfile")
+_installed_stubs: list[str] = []
+for _mod_name in _STUBBED_MODULE_NAMES:
+    if _mod_name in sys.modules:
+        continue  # already imported (real) — never shadow it
+    try:
+        importlib.import_module(_mod_name)  # importable → use the real module
+        continue
+    except ImportError:
+        pass
+    sys.modules[_mod_name] = MagicMock()
+    _installed_stubs.append(_mod_name)
 
 from tools.map_generator.beatmap_generator import (
     _enforce_density_minimum,
@@ -40,6 +56,10 @@ from tools.map_generator.rhythm.rhythm_density import (
     compute_max_allowed_gap,
 )
 from tools.map_generator.spinners.spinner_pipeline import _check_spinner_clearance
+
+# Restore sys.modules so the stubs cannot leak into other test modules.
+for _mod_name in _installed_stubs:
+    sys.modules.pop(_mod_name, None)
 
 DURATION_MS = 16_431
 

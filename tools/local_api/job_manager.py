@@ -126,8 +126,9 @@ class JobManager:
             )
         return reconciled
 
-    def get_job(self, job_id: str):
-        return self._get_record(job_id).state.to_response()
+    def get_job(self, job_id: str, *, since: int = 0):
+        """Job state; with ``since`` set, only events newer than that index."""
+        return self._get_record(job_id).state.to_response(since=since)
 
     def set_total_stages(self, job_id: str, total_stages: int) -> None:
         self._mutate(job_id, lambda state: setattr(state, "total_stages", total_stages))
@@ -299,14 +300,21 @@ class JobManager:
         with self._lock:
             self._active_by_workspace.pop(workspace_id, None)
 
-    def stream_events(self, job_id: str):
+    def stream_events(self, job_id: str, *, since: int = 0):
+        """SSE stream of job events, tailed incrementally.
+
+        P3.4 (Phase 6 roadmap): payloads carry only events newer than the
+        client's ``since`` watermark (monotonic ``JobEvent.index``), so each
+        tick ships O(new events) instead of the full log.
+        """
         record = self._get_record(job_id)
-        last_emitted_index = 0
-        # Emit the initial state (all events so far)
-        initial = record.state.to_response()
+        # Emit the initial state (events after ``since`` only).
+        initial = record.state.to_response(since=since)
         yield self._format_sse_payload(initial)
         if initial.events:
             last_emitted_index = initial.events[-1].index
+        else:
+            last_emitted_index = since
         if initial.status in {"completed", "failed", "cancelled"}:
             return
         while True:
@@ -327,7 +335,7 @@ class JobManager:
                 )
                 yield self._format_sse_payload(payload)
             elif full_response.status != record.state.status:
-                # Status changed but no new events — emit status-only update
+                # Status changed but no new events - emit status-only update
                 yield self._format_sse_payload(full_response)
             if full_response.status in {"completed", "failed", "cancelled"}:
                 break

@@ -170,6 +170,25 @@ export interface JobEvent {
   message: string;
 }
 
+/**
+ * P3.4: the backend keeps job events in a bounded ring buffer and the poller
+ * fetches only events newer than the client's last seen index (`?since=`).
+ * This helper accumulates those incremental batches into the client-side log
+ * (also capped) without relying on the server re-sending the full list.
+ */
+export const MAX_CACHED_JOB_EVENTS = 200;
+
+export function accumulateJobEvents(
+  previous: JobEvent[],
+  incoming: JobEvent[],
+): JobEvent[] {
+  if (incoming.length === 0) {
+    return previous;
+  }
+  const merged = [...previous, ...incoming].slice(-MAX_CACHED_JOB_EVENTS);
+  return merged;
+}
+
 // P2.4: server-measured wall-clock duration for a finished pipeline stage.
 export interface StageTiming {
   index: number;

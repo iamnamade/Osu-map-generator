@@ -7,6 +7,7 @@ Verifies that:
 """
 from __future__ import annotations
 
+import importlib
 import math
 import sys
 import unittest
@@ -30,9 +31,15 @@ _STUBBED_MODULE_NAMES = (
 )
 _installed_stubs: list[str] = []
 for _mod_name in _STUBBED_MODULE_NAMES:
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
-        _installed_stubs.append(_mod_name)
+    if _mod_name in sys.modules:
+        continue  # already imported (real) — never shadow it
+    try:
+        importlib.import_module(_mod_name)  # importable → use the real module
+        continue
+    except ImportError:
+        pass
+    sys.modules[_mod_name] = MagicMock()
+    _installed_stubs.append(_mod_name)
 
 # Ensure tools package is importable
 _root = Path(__file__).resolve().parents[2]  # repo root

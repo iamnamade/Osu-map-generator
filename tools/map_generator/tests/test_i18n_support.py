@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 import tempfile
@@ -16,8 +17,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-for _mod in ("librosa", "soundfile"):
-    sys.modules.setdefault(_mod, MagicMock())
+# Stub heavy audio dependencies before importing the generator package, and
+# restore them again as soon as the imports below finish so the stubs cannot
+# leak into other test modules sharing this process. Only modules that are
+# genuinely absent get stubbed: shadowing an importable soundfile with a
+# MagicMock poisons librosa's lazy submodule imports for the whole process.
+_STUBBED_MODULE_NAMES = ("librosa", "soundfile")
+_installed_stubs: list[str] = []
+for _mod_name in _STUBBED_MODULE_NAMES:
+    if _mod_name in sys.modules:
+        continue  # already imported (real) — never shadow it
+    try:
+        importlib.import_module(_mod_name)  # importable → use the real module
+        continue
+    except ImportError:
+        pass
+    sys.modules[_mod_name] = MagicMock()
+    _installed_stubs.append(_mod_name)
 
 from tools.text_utils import (
     build_mapset_filename,
@@ -28,6 +44,10 @@ from tools.text_utils import (
     romanize,
     sanitize_filename_component,
 )
+
+# Restore sys.modules so the stubs cannot leak into other test modules.
+for _mod_name in _installed_stubs:
+    sys.modules.pop(_mod_name, None)
 
 GEORGIAN_TITLE = "\u10db\u10d4\u10e0\u10d4 \u10e0\u10d0"  # "მერე რა"
 GEORGIAN_ARTIST = "\u10d3\u10d0\u10d2\u10d3\u10d0\u10d2\u10d0\u10dc\u10d8"  # "დაგდაგანი"

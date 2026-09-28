@@ -98,8 +98,9 @@ export class GeneratorApiClient {
     );
   }
 
-  async getJob(jobId: string): Promise<JobStateResponse> {
-    return await this.requestJson<JobStateResponse>(`/jobs/${jobId}`);
+  async getJob(jobId: string, since = 0): Promise<JobStateResponse> {
+    const query = since > 0 ? `?since=${encodeURIComponent(String(since))}` : "";
+    return await this.requestJson<JobStateResponse>(`/jobs/${jobId}${query}`);
   }
 
   async cancelJob(jobId: string): Promise<JobStateResponse> {

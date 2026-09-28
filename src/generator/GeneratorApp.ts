@@ -3,6 +3,7 @@ import {
   GeneratorApiError,
 } from "./GeneratorApiClient";
 import {
+  accumulateJobEvents,
   applyMappingPresetToSettings,
   applySharedGenerationSettings,
   cloneWorkspaceMetadata,
@@ -1273,12 +1274,24 @@ export class GeneratorApp {
   private startPolling(jobId: string): void {
     this.stopPolling();
 
+    // P3.4: tail the bounded backend log — each poll requests only events
+    // newer than the highest index we hold and merges them into the client
+    // log (also capped), so neither side accumulates an unbounded array.
+    let lastEventIndex = 0;
+
     const poll = async () => {
       try {
-        const job = await this.api.getJob(jobId);
+        const job = await this.api.getJob(jobId, lastEventIndex);
+        const previousEvents = this.store.getState().job?.events ?? [];
+        const merged = accumulateJobEvents(previousEvents, job.events);
+        const nextJob: JobStateResponse = { ...job, events: merged };
+        lastEventIndex = merged.reduce(
+          (max, event) => Math.max(max, event.index),
+          lastEventIndex,
+        );
         this.store.update((state) => ({
           ...state,
-          job,
+          job: nextJob,
           jobId: job.jobId,
           currentStep:
             job.status === "completed" && (job.result || state.workspace?.workspace.lastResult)
