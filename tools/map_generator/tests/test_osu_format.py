@@ -28,6 +28,7 @@ class OsuFormatTests(unittest.TestCase):
         self.workspace_root = Path(__file__).resolve().parents[3]
         tmp_root = self.workspace_root / ".tmp-osu-tests"
         tmp_root.mkdir(parents=True, exist_ok=True)
+        self.tmp_root = tmp_root
         self.temp_dir = Path(tempfile.mkdtemp(prefix="osu-format-", dir=tmp_root))
         self.tracked_paths: set[Path] = set()
 
@@ -68,6 +69,12 @@ class OsuFormatTests(unittest.TestCase):
                 path.unlink(missing_ok=True)
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+        # P2.2: drop the shared scratch root too once it is empty so repeated
+        # runs do not leave an empty .tmp-osu-tests directory behind.
+        try:
+            self.tmp_root.rmdir()
+        except OSError:
+            pass
 
     def test_parser_handles_comments_metadata_and_timing_points(self) -> None:
         parsed = parse_osu_text(make_circle_only_osu_text())

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,15 +134,18 @@ class WorkspaceManager:
             update={"updated_at": datetime.now(UTC)},
             deep=True,
         )
-        paths.manifest_path.write_text(
+        payload = (
             updated_manifest.model_dump_json(
                 indent=2,
                 by_alias=True,
                 exclude_none=True,
             )
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
+        # P2.3: write atomically (temp file in the same directory + os.replace)
+        # so a crash or a concurrent read/update can never observe a truncated
+        # or half-written manifest.
+        _atomic_write_text(paths.manifest_path, payload)
         return updated_manifest
 
     def resolve_relative_path(self, workspace_id: str, relative_path: str) -> Path:
@@ -242,3 +247,27 @@ class WorkspaceManager:
         ]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically via a sibling temp file.
+
+    ``os.replace`` is atomic on the same filesystem, so readers see either the
+    old complete file or the new complete file, never a partial write.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise

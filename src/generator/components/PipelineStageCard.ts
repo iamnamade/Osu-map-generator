@@ -1,6 +1,7 @@
 import type {
   DifficultyName,
   JobStateResponse,
+  StageTiming,
 } from "../GeneratorModels";
 import type {
   PipelineStageDescriptor,
@@ -8,7 +9,7 @@ import type {
 } from "../GeneratorValidation";
 import { capitalize } from "../GeneratorModels";
 import { renderIcon } from "./GeneratorIcons";
-import { escapeHtml } from "../../shared/format";
+import { escapeHtml, formatClockTimeMs } from "../../shared/format";
 
 export function renderPipelineStageCard(params: {
   stage: PipelineStageDescriptor;
@@ -86,7 +87,10 @@ function resolveStageDetail(
   }
 
   if (state === "complete") {
-    return "Completed.";
+    const timing = findStageTiming(job, stage.code);
+    return timing
+      ? `Completed in ${formatStageDuration(timing.durationMs)}.`
+      : "Completed.";
   }
 
   if (state === "failed") {
@@ -121,7 +125,32 @@ function renderStageMeta(
     items.push(candidateChip);
   }
 
+  // P2.4: show the server-measured duration for stages that have finished.
+  const timing = findStageTiming(job, stage.code);
+  if (timing) {
+    items.push(
+      `<span class="pipeline-stage-chip pipeline-stage-chip--timing">${escapeHtml(formatStageDuration(timing.durationMs))}</span>`,
+    );
+  }
+
   return items.join("");
+}
+
+function findStageTiming(
+  job: JobStateResponse | undefined,
+  stageCode: string,
+): StageTiming | undefined {
+  return job?.stageTimings?.find((timing) => timing.stage === stageCode);
+}
+
+function formatStageDuration(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${Math.max(1, Math.round(durationMs))} ms`;
+  }
+  if (durationMs < 60_000) {
+    return `${(durationMs / 1000).toFixed(1)} s`;
+  }
+  return formatClockTimeMs(durationMs);
 }
 
 function renderCandidateChip(

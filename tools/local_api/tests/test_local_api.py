@@ -72,6 +72,19 @@ class LocalApiRouteTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertFalse(workspace_dir.exists())
 
+    def test_manifest_save_is_atomic_and_leaves_no_temp_files(self) -> None:
+        """P2.3: temp-file + os.replace writes must not leave scratch behind."""
+        workspace_id = self._create_workspace_id()
+        paths = self.workspace_manager.get_workspace_paths(workspace_id)
+        manifest = self.workspace_manager.load_manifest(workspace_id)
+
+        self.workspace_manager.save_manifest(manifest)
+
+        leftovers = list(paths.root.glob(f".{paths.manifest_path.name}.*.tmp"))
+        self.assertEqual(leftovers, [])
+        payload = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["workspaceId"], workspace_id)
+
     def test_metadata_update_succeeds_before_audio_and_stays_not_ready(self) -> None:
         workspace_id = self._create_workspace_id()
 

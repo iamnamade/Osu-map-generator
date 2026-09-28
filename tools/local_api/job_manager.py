@@ -11,6 +11,7 @@ from threading import Lock, Thread
 from .artifact_service import ArtifactService
 from .errors import LocalApiConflictError, LocalApiNotFoundError
 from .job_models import JobRecord, JobRuntimeState, utc_now
+from .models import StageTiming
 from .workspace_manager import WorkspaceManager
 
 _logger = logging.getLogger(__name__)
@@ -159,6 +160,32 @@ class JobManager:
         manifest = self.workspace_manager.load_manifest(self._get_record(job_id).state.workspace_id)
         manifest = manifest.model_copy(update={"job_status": "running"}, deep=True)
         self.workspace_manager.save_manifest(manifest)
+
+    def record_stage_timing(
+        self,
+        job_id: str,
+        *,
+        index: int,
+        stage_code: str,
+        stage_label: str,
+        difficulty: str | None,
+        duration_ms: float,
+        status: str,
+    ) -> None:
+        """P2.4: append the measured wall-clock duration for a finished stage."""
+        timing = StageTiming(
+            index=index,
+            stage=stage_code,
+            label=stage_label,
+            difficulty=difficulty,
+            duration_ms=max(0, int(round(duration_ms))),
+            status=status,
+        )
+
+        def mutate(state: JobRuntimeState) -> None:
+            state.stage_timings.append(timing)
+
+        self._mutate(job_id, mutate)
 
     def complete_stage(self, job_id: str, stage_label: str) -> None:
         def mutate(state: JobRuntimeState) -> None:

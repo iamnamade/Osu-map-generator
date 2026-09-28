@@ -14,6 +14,7 @@ Runs the full pipeline on a real audio track:
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import shutil
@@ -632,7 +633,7 @@ def _promote_circles_to_sliders(objects, needed, rng, difficulty):
     return objects
 
 
-def main():
+def _run_pipeline() -> None:
     start = time.time()
     setup_dirs()
 
@@ -670,5 +671,29 @@ def main():
     print()
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the end-to-end beatmap generation pipeline.",
+    )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="Keep the .tmp-e2e-generation scratch directory for inspection.",
+    )
+    args = parser.parse_args(argv)
+
+    # P2.2: discard any stale scratch state before the run and always remove the
+    # working directory afterwards (unless --keep) so repeated pipeline runs
+    # cannot accumulate transient data on disk.
+    if not args.keep:
+        shutil.rmtree(WORK, ignore_errors=True)
+    try:
+        _run_pipeline()
+    finally:
+        if not args.keep:
+            shutil.rmtree(WORK, ignore_errors=True)
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

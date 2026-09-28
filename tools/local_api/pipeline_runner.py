@@ -212,6 +212,16 @@ class PipelineRunner:
                     f"after {_stage_ms:.0f} ms."
                 )
                 _logger.warning(_cancel_msg)
+                # P2.4: record the cancelled stage's measured duration too.
+                job_manager.record_stage_timing(
+                    job_id,
+                    index=index,
+                    stage_code=stage.code,
+                    stage_label=stage.label,
+                    difficulty=stage.difficulty,
+                    duration_ms=_stage_ms,
+                    status="cancelled",
+                )
                 job_manager.log(job_id, "warning", _cancel_msg)
                 self._append_log(log_path, f"[cancelled] {_cancel_msg}")
                 refreshed_manifest = self.artifact_service.refresh_workspace_artifacts(
@@ -240,6 +250,16 @@ class PipelineRunner:
                     f"{_traceback}"
                 )
                 _logger.error(_error_detail)
+                # P2.4: record the failed stage's measured duration.
+                job_manager.record_stage_timing(
+                    job_id,
+                    index=index,
+                    stage_code=stage.code,
+                    stage_label=stage.label,
+                    difficulty=stage.difficulty,
+                    duration_ms=_stage_ms,
+                    status="failed",
+                )
                 job_manager.log(job_id, "error", _error_header)
                 job_manager.log(job_id, "error", f"Stack trace:\n{_traceback}")
                 self._append_log(log_path, _error_detail)
@@ -266,6 +286,16 @@ class PipelineRunner:
                 len(stages),
                 stage.label,
                 _stage_ms,
+            )
+            # P2.4: surface the server-measured stage duration to the client.
+            job_manager.record_stage_timing(
+                job_id,
+                index=index,
+                stage_code=stage.code,
+                stage_label=stage.label,
+                difficulty=stage.difficulty,
+                duration_ms=_stage_ms,
+                status="completed",
             )
             job_manager.complete_stage(job_id, stage.label)
 

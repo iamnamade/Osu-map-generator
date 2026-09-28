@@ -1685,6 +1685,11 @@ img {
   border-color: rgba(55, 242, 160, 0.34);
 }
 
+.pipeline-stage-chip--timing {
+  color: var(--generator-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .pipeline-stage-row-icon {
   width: 34px;
   height: 34px;

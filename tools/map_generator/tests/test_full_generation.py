@@ -4,6 +4,7 @@ export .osu files, and package into .osz."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import sys
@@ -79,7 +80,7 @@ def print_counts(label: str, data: dict) -> None:
     print(f"{label} {total} objects ({circles} circles, {sliders} sliders, {ratio:.1f}%)")
 
 
-def main() -> int:
+def _run_pipeline() -> int:
     t0 = time.monotonic()
 
     dirs = build_dirs(WORKSPACE_ROOT)
@@ -225,6 +226,28 @@ def main() -> int:
     print(f"\n  .osz output: {osz_path}")
     print(f"  Import this file directly into osu! via File > Import.\n")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the full generation end-to-end harness.",
+    )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="Keep the .tmp-e2e-generation scratch directory for inspection.",
+    )
+    args = parser.parse_args(argv)
+
+    # P2.2: clear the transient workspace before and after the run so repeated
+    # harness executions do not leak tools/.tmp-e2e-generation.
+    if not args.keep:
+        shutil.rmtree(WORKSPACE_ROOT, ignore_errors=True)
+    try:
+        return _run_pipeline()
+    finally:
+        if not args.keep:
+            shutil.rmtree(WORKSPACE_ROOT, ignore_errors=True)
 
 
 if __name__ == "__main__":

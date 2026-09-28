@@ -170,6 +170,16 @@ export interface JobEvent {
   message: string;
 }
 
+// P2.4: server-measured wall-clock duration for a finished pipeline stage.
+export interface StageTiming {
+  index: number;
+  stage: string;
+  label: string;
+  difficulty?: DifficultyName | null;
+  durationMs: number;
+  status: "completed" | "failed" | "cancelled";
+}
+
 export interface JobStateResponse {
   jobId: string;
   workspaceId: string;
@@ -192,6 +202,7 @@ export interface JobStateResponse {
   updatedAt: string;
   finishedAt?: string | null;
   events: JobEvent[];
+  stageTimings?: StageTiming[];
   result?: JobResultSummary | null;
 }
 

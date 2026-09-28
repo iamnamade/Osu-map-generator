@@ -320,6 +320,19 @@ class JobEvent(BaseModel):
     message: str
 
 
+class StageTiming(BaseModel):
+    """P2.4: measured wall-clock duration for one completed pipeline stage."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    index: int
+    stage: str
+    label: str
+    difficulty: DifficultyName | None = None
+    duration_ms: int = Field(alias="durationMs")
+    status: Literal["completed", "failed", "cancelled"]
+
+
 class JobStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -344,6 +357,7 @@ class JobStateResponse(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
     finished_at: datetime | None = Field(default=None, alias="finishedAt")
     events: list[JobEvent] = Field(default_factory=list)
+    stage_timings: list[StageTiming] = Field(default_factory=list, alias="stageTimings")
     result: JobResultSummary | None = None
 
 

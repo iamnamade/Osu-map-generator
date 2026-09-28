@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from threading import Condition, Thread
 
-from .models import JobEvent, JobResultSummary, JobStateResponse
+from .models import JobEvent, JobResultSummary, JobStateResponse, StageTiming
 
 
 def utc_now() -> datetime:
@@ -34,6 +34,7 @@ class JobRuntimeState:
     updated_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
     events: list[JobEvent] = field(default_factory=list)
+    stage_timings: list[StageTiming] = field(default_factory=list)
     cancel_requested: bool = False
     result: JobResultSummary | None = None
     next_event_index: int = 1
@@ -73,6 +74,7 @@ class JobRuntimeState:
             updatedAt=self.updated_at,
             finishedAt=self.finished_at,
             events=self.events if include_events else [],
+            stageTimings=self.stage_timings,
             result=self.result,
         )
 
