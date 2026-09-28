@@ -15,12 +15,24 @@ from typing import Any
 from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
-# Stub heavy audio dependencies BEFORE any map_generator imports
+# Stub heavy audio dependencies BEFORE any map_generator imports.
+#
+# Only modules that are genuinely absent get stubbed, and the stubs are removed
+# again as soon as the imports below finish. Leaking them into ``sys.modules``
+# poisons later tests in the same process: ``librosa.filters.get_window``
+# lazily does ``import scipy.signal`` at call time, so a leaked MagicMock for
+# ``scipy.signal`` makes real audio analysis fail with
+# "pad_width must be of integral type".
 # ---------------------------------------------------------------------------
-for _mod_name in ("librosa", "soundfile", "numpy", "numpy.lib", "numpy.lib.stride_tricks",
-                   "scipy", "scipy.signal", "scipy.interpolate", "scipy.stats"):
+_STUBBED_MODULE_NAMES = (
+    "librosa", "soundfile", "numpy", "numpy.lib", "numpy.lib.stride_tricks",
+    "scipy", "scipy.signal", "scipy.interpolate", "scipy.stats",
+)
+_installed_stubs: list[str] = []
+for _mod_name in _STUBBED_MODULE_NAMES:
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = MagicMock()
+        _installed_stubs.append(_mod_name)
 
 # Ensure tools package is importable
 _root = Path(__file__).resolve().parents[2]  # repo root
@@ -36,6 +48,10 @@ from tools.map_generator.sections.section_scorer import (
     _repetition_count,
     _grid_region,
 )
+
+# Restore ``sys.modules`` so the stubs cannot leak into other test modules.
+for _mod_name in _installed_stubs:
+    sys.modules.pop(_mod_name, None)
 
 
 # ---------------------------------------------------------------------------

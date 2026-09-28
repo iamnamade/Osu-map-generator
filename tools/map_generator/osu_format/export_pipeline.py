@@ -31,7 +31,7 @@ from .models import (
     ProjectSpinnerObject,
 )
 from .report_writer import write_export_report
-from .timing_converter import build_primary_timing_point, osu_audio_filename_from_browser_path
+from .timing_converter import build_timing_points, osu_audio_filename_from_browser_path
 from .validator import validate_parsed_osu_beatmap
 from .writer import write_osu_file, write_osu_text
 from .parser import parse_osu_text
@@ -55,7 +55,7 @@ def export_osu_file(
     osu_creator = creator or _read_nested_string(beatmap.extra_fields, ["osu", "creator"]) or "osu-map-ai"
     difficulty_name = infer_project_difficulty(beatmap)
     osu_version_name = version_name or derive_version_name(beatmap, difficulty_name) or "Imported"
-    timing_point, bpm, offset_ms = build_primary_timing_point(analysis_path)
+    timing_points, bpm, offset_ms = build_timing_points(analysis_path)
     preserved_sections = extract_preserved_sections(beatmap.extra_fields)
     colours = extract_preserved_colours(beatmap.extra_fields)
     difficulty_values = convert_project_difficulty_to_osu_values(beatmap, difficulty_name)
@@ -92,7 +92,7 @@ def export_osu_file(
         ]
         if background_filename
         else [],
-        timing_points=[timing_point],
+        timing_points=timing_points,
         colours=colours,
         hit_objects=hit_objects,
     )
@@ -102,6 +102,10 @@ def export_osu_file(
     warnings: list[str] = []
     if bpm == 120.0:
         warnings.append("No positive BPM estimate was available. Export fell back to 120 BPM.")
+    if len(timing_points) > 1:
+        warnings.append(
+            f"Multi-BPM export: {len(timing_points)} uninherited timing points emitted from detected tempo regions."
+        )
     report = OsuExportReport(
         source_json_path=map_path.as_posix(),
         output_osu_path=output_path.as_posix(),

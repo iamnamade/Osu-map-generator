@@ -10,7 +10,7 @@ from .config import LocalApiConfig
 from .errors import LocalApiPayloadTooLargeError, LocalApiValidationError
 from .metadata_service import MetadataService
 from .models import UploadedFileDescriptor, WorkspaceManifest
-from .security import ensure_allowed_extension, sha256_hex
+from .security import ensure_allowed_extension, sha256_hex, verify_upload_content
 from .workspace_manager import WorkspaceManager
 
 
@@ -34,7 +34,7 @@ class UploadService:
         paths = self.workspace_manager.ensure_workspace_exists(workspace_id)
         normalized_name = f"source-audio{suffix}"
         destination = paths.source_dir / normalized_name
-        detected_metadata = self._write_upload_file(
+        detected_metadata, canonical_content_type = self._write_upload_file(
             upload_file,
             destination,
             self.config.max_audio_upload_bytes,
@@ -47,7 +47,9 @@ class UploadService:
             normalizedFilename=normalized_name,
             relativePath=f"source/{normalized_name}",
             sizeBytes=destination.stat().st_size,
-            contentType=upload_file.content_type or "application/octet-stream",
+            # P0.4: serve the sniffed canonical type, not the spoofable
+            # client-declared header.
+            contentType=canonical_content_type,
             sha256=sha256_hex(destination),
             detectedMetadata=detected_metadata,
         )
@@ -77,7 +79,7 @@ class UploadService:
         paths = self.workspace_manager.ensure_workspace_exists(workspace_id)
         normalized_name = f"background{suffix}"
         destination = paths.source_dir / normalized_name
-        self._write_upload_file(
+        _detected_metadata, canonical_content_type = self._write_upload_file(
             upload_file,
             destination,
             self.config.max_background_upload_bytes,
@@ -90,7 +92,9 @@ class UploadService:
             normalizedFilename=normalized_name,
             relativePath=f"source/{normalized_name}",
             sizeBytes=destination.stat().st_size,
-            contentType=upload_file.content_type or "application/octet-stream",
+            # P0.4: serve the sniffed canonical type, not the spoofable
+            # client-declared header.
+            contentType=canonical_content_type,
             sha256=sha256_hex(destination),
             detectedMetadata=None,
         )
@@ -145,11 +149,15 @@ class UploadService:
                     temp_handle.write(chunk)
             if total_size <= 0:
                 raise LocalApiValidationError(f"{label.capitalize()} must not be empty.")
+            # P0.4: verify magic bytes against the declared extension BEFORE
+            # the file becomes visible at its destination. Rejects spoofed
+            # MIME declarations and renamed arbitrary payloads.
+            canonical_content_type = verify_upload_content(temporary_path, Path(upload_file.filename).suffix.lower())
             if expect_audio:
                 detected_metadata = self.metadata_service.extract_audio_metadata(temporary_path)
             os.replace(temporary_path, destination)
             temporary_path = None
-            return detected_metadata
+            return detected_metadata, canonical_content_type
         finally:
             if temporary_path is not None and temporary_path.exists():
                 temporary_path.unlink(missing_ok=True)

@@ -75,6 +75,20 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # P0.2 (Phase 6 roadmap): boot reconciliation. Job records are in-memory
+    # only, so any workspace manifest still flagged queued/running at startup
+    # is an orphan from a previous process. Flip them to failed so cleanup
+    # tooling can remove them again.
+    recovered = cleanup_service.recover_orphaned_workspaces()
+    if recovered:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Boot reconciliation marked %d orphaned running workspace(s) as failed: %s",
+            len(recovered),
+            ", ".join(recovered),
+        )
+
     @app.exception_handler(LocalApiError)
     async def handle_local_api_error(_, error: LocalApiError):
         return JSONResponse(

@@ -201,7 +201,10 @@ class PipelineRunner:
             self._append_log(log_path, f"[stage {index}/{len(stages)}] {stage.label}")
             _stage_start = time.monotonic()
             try:
-                stage.action()
+                # P0.2: every stage runs under the execution watchdog so a
+                # hung analysis/evolution stage fails the job instead of
+                # blocking the worker thread forever.
+                job_manager.run_stage_with_watchdog(job_id, stage.label, stage.action)
             except LocalApiCancellationRequested:
                 _stage_ms = (time.monotonic() - _stage_start) * 1000
                 _cancel_msg = (
@@ -667,6 +670,10 @@ class PipelineRunner:
         settings,
     ) -> None:
         def progress_callback(current: int, total: int, message: str) -> None:
+            # P0.2: poll cancellation between candidates so long evolution
+            # stages can be interrupted mid-pass instead of only at the next
+            # stage boundary.
+            self._check_cancellation(job_manager, job_id)
             job_manager.update_candidate_progress(
                 job_id,
                 difficulty=difficulty,

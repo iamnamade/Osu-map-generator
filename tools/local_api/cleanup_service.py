@@ -11,6 +11,22 @@ class CleanupService:
         self.workspace_manager = workspace_manager
         self.job_manager = job_manager
 
+    def recover_orphaned_workspaces(self) -> list[str]:
+        """P0.2: reconcile zombie ``running`` workspaces after an API restart.
+
+        Job records are in-memory only, so manifests may still claim a live
+        job after the process was killed or restarted. Boot reconciliation
+        flips those manifests to ``failed`` so the normal cleanup commands
+        can remove them again instead of being blocked forever.
+        """
+        workspaces_root = self.workspace_manager.config.workspaces_root
+        if not workspaces_root.exists():
+            return []
+        workspace_ids = [
+            path.name for path in sorted(workspaces_root.iterdir()) if path.is_dir()
+        ]
+        return self.job_manager.reconcile_orphaned_running_jobs(workspace_ids)
+
     def delete_workspace(self, workspace_id: str) -> None:
         manifest = self.workspace_manager.load_manifest(workspace_id)
         if manifest.job_status in {"queued", "running"}:

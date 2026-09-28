@@ -23,6 +23,10 @@ from tools.local_api.models import (
 )
 from tools.local_api.workspace_manager import WorkspaceManager
 
+# P0.4: uploads are magic-byte verified, so fixtures carry a real ID3v2
+# header (identity/decoding of the payload is mocked where needed).
+VALID_MP3_HEADER = b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\x00" * 64
+
 
 class LocalApiRouteTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -245,11 +249,11 @@ class LocalApiRouteTests(unittest.TestCase):
     def _create_workspace_id(self) -> str:
         return self.client.post("/api/workspaces").json()["workspace"]["workspaceId"]
 
-    def _upload_audio(self, workspace_id: str):
+    def _upload_audio(self, workspace_id: str, content: bytes = VALID_MP3_HEADER):
         return self.client.post(
             f"/api/workspaces/{workspace_id}/audio",
             files={
-                "file": ("song.mp3", io.BytesIO(b"fake mp3 payload"), "audio/mpeg"),
+                "file": ("song.mp3", io.BytesIO(content), "audio/mpeg"),
             },
         )
 
