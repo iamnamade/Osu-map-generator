@@ -2,31 +2,20 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePythonInterpreter } from "./lib/python-resolver.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const rootDir = path.resolve(currentDir, "..");
 
+// Resolve a working Python interpreter up front (each candidate is probed,
+// so stale virtualenvs and uninstalled interpreters are skipped automatically).
+const resolvedPython = resolvePythonInterpreter(rootDir);
+
 const candidateCommands = [
   {
-    command: path.join(rootDir, ".venv", "Scripts", "python.exe"),
-    argsPrefix: [],
-  },
-  {
-    command: path.join(rootDir, ".venv", "bin", "python"),
-    argsPrefix: [],
-  },
-  {
-    command: "python",
-    argsPrefix: [],
-  },
-  {
-    command: "py",
-    argsPrefix: ["-3"],
-  },
-  {
-    command: "py",
-    argsPrefix: [],
+    command: resolvedPython.command,
+    argsPrefix: resolvedPython.args,
   },
 ];
 

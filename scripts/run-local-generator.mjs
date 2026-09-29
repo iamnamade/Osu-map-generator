@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { resolvePythonInterpreter } from "./lib/python-resolver.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const scriptsDir = path.dirname(currentFile);
@@ -8,7 +9,10 @@ const projectRoot = path.resolve(scriptsDir, "..");
 const mode = process.argv[2] ?? "all";
 const isWindows = process.platform === "win32";
 
-const pythonPath = resolvePythonPath();
+const pythonPath = resolvePythonInterpreter(projectRoot);
+console.log(
+  `Using Python ${pythonPath.version} (${pythonPath.source}): ${pythonPath.command} ${pythonPath.args.join(" ")}`.trimEnd(),
+);
 const npmCommand = isWindows ? "npm.cmd" : "npm";
 
 const children = [];
@@ -81,16 +85,6 @@ if (mode === "all") {
   console.log("Local generator services starting...");
   console.log("API:       http://127.0.0.1:8765/api/health");
   console.log("Frontend:  http://127.0.0.1:5173/generator.html");
-}
-
-function resolvePythonPath() {
-  const venvPython = isWindows
-    ? path.join(projectRoot, ".venv", "Scripts", "python.exe")
-    : path.join(projectRoot, ".venv", "bin", "python");
-  return {
-    command: path.normalize(venvPython),
-    args: [],
-  };
 }
 
 function spawnNamedProcess(name, command, args) {

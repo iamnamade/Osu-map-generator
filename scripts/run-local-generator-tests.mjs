@@ -1,15 +1,16 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { resolvePythonInterpreter } from "./lib/python-resolver.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const scriptsDir = path.dirname(currentFile);
 const projectRoot = path.resolve(scriptsDir, "..");
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
-const pythonCommand = isWindows
-  ? path.join(projectRoot, ".venv", "Scripts", "python.exe")
-  : path.join(projectRoot, ".venv", "bin", "python");
+const python = resolvePythonInterpreter(projectRoot);
+const pythonCommand = python.command;
+const pythonArgs = python.args;
 
 await runStep("TypeScript generator tests", npmCommand, [
   "exec",
@@ -19,6 +20,7 @@ await runStep("TypeScript generator tests", npmCommand, [
 ]);
 
 await runStep("Python local API tests", pythonCommand, [
+  ...pythonArgs,
   "-m",
   "unittest",
   "discover",
