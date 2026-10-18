@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import bisect
 from pathlib import Path
+from typing import Any, Sequence
 
 from ..analysis_io import load_analysis_json
 from ..models import AudioAnalysis
 from ..utils import MapGeneratorError
+from ..sliders import sv_calibration
 from ._constants import load_osu_interop_constants
-from .models import OsuTimingPoint
+from .models import OsuTimingPoint, ProjectSliderObject
 
 # Local-BPM regions whose estimates differ by less than this much from the
 # global BPM are considered "same tempo" for the single-point fast path.
@@ -169,3 +172,104 @@ def deterministic_archive_timestamp() -> tuple[int, int, int, int, int, int]:
 
 def _looks_like_windows_drive(value: str) -> bool:
     return len(value) >= 2 and value[1] == ":" and value[0].isalpha()
+
+
+# ---------------------------------------------------------------------------
+# Inherited (green) timing points so sliders play at the speed they were drawn
+# ---------------------------------------------------------------------------
+#
+# Without these, a slider's real duration in the client is
+# `pixel_length / (SliderMultiplier * 100) * beat_length`, which has nothing to do
+# with the `end_time` the generator chose. Emitting one inherited point per distinct
+# slider velocity makes the exported map match its own geometry.
+
+#: |SV - 1| below this needs no inherited point: the default multiplier already is 1.
+_SV_IDENTITY_EPSILON = 1e-3
+
+
+def build_slider_velocity_points(
+    objects: Sequence[Any],
+    timing_points: Sequence[OsuTimingPoint],
+    *,
+    slider_multiplier: float,
+) -> list[OsuTimingPoint]:
+    """Inherited timing points making every slider's duration match its geometry.
+
+    The active beat length is resolved per slider, so a map with detected BPM regions
+    gets per-region velocities and therefore per-region SV — the multiplier adapts to
+    tempo changes instead of assuming a single global BPM.
+
+    Returns an empty list when there are no sliders, no usable durations, or every
+    slider already sits at SV = 1.
+    """
+    if not timing_points or slider_multiplier <= 0:
+        return []
+
+    sliders = [obj for obj in objects if isinstance(obj, ProjectSliderObject)]
+    if not sliders:
+        return []
+
+    anchors = sorted((point for point in timing_points if point.uninherited == 1), key=lambda p: p.time)
+    if not anchors:
+        return []
+    anchor_times = [point.time for point in anchors]
+
+    constants = load_osu_interop_constants()["timingDefaults"]
+    points: list[OsuTimingPoint] = []
+    active_sv: float | None = None
+
+    for slider in sorted(sliders, key=lambda item: item.time):
+        duration_ms = float(slider.end_time) - float(slider.time)
+        if duration_ms <= 0 or slider.pixel_length <= 0:
+            continue
+
+        index = bisect.bisect_right(anchor_times, int(slider.time)) - 1
+        beat_length = anchors[index].beat_length
+        if beat_length <= 0:
+            continue
+
+        try:
+            velocity = sv_calibration.path_velocity(
+                float(slider.pixel_length), int(slider.repeats), duration_ms
+            )
+            base = sv_calibration.base_slider_velocity(float(slider_multiplier), float(beat_length))
+            sv = sv_calibration.sv_multiplier(velocity, base)
+        except ValueError:
+            continue
+
+        if abs(sv - 1.0) < _SV_IDENTITY_EPSILON:
+            active_sv = 1.0
+            continue
+        if active_sv is not None and abs(sv - active_sv) < _SV_IDENTITY_EPSILON:
+            continue  # same speed as the point already in force: no line needed
+
+        active_sv = sv
+        points.append(
+            OsuTimingPoint(
+                time=int(slider.time),
+                beat_length=round(-100.0 / sv, 4),
+                meter=int(constants["meter"]),
+                sample_set=int(constants["sampleSetId"]),
+                sample_index=int(constants["sampleIndex"]),
+                volume=int(constants["volume"]),
+                uninherited=0,
+                effects=int(constants["effects"]),
+            )
+        )
+    return points
+
+
+def merge_timing_points(
+    uninherited: Sequence[OsuTimingPoint],
+    inherited: Sequence[OsuTimingPoint],
+) -> list[OsuTimingPoint]:
+    """Interleave both timing-point kinds, uninherited first at equal times.
+
+    osu! applies the last point at or before a time, so a red line and a green line
+    sharing a timestamp must be written red-first or the SV would be swallowed by the
+    tempo reset.
+    """
+    return sorted(
+        [*uninherited, *inherited],
+        key=lambda point: (point.time, -point.uninherited),
+    )

@@ -31,7 +31,12 @@ from .models import (
     ProjectSpinnerObject,
 )
 from .report_writer import write_export_report
-from .timing_converter import build_timing_points, osu_audio_filename_from_browser_path
+from .timing_converter import (
+    build_slider_velocity_points,
+    build_timing_points,
+    merge_timing_points,
+    osu_audio_filename_from_browser_path,
+)
 from .validator import validate_parsed_osu_beatmap
 from .writer import write_osu_file, write_osu_text
 from .parser import parse_osu_text
@@ -60,6 +65,16 @@ def export_osu_file(
     colours = extract_preserved_colours(beatmap.extra_fields)
     difficulty_values = convert_project_difficulty_to_osu_values(beatmap, difficulty_name)
     hit_objects = project_objects_to_osu_hit_objects(beatmap.objects)
+    # Phase 25: emit inherited (green) points so each slider's real play duration matches
+    # the pixel length / end time the generator chose. Without these the client falls back
+    # to SV = 1 and every slider is mis-timed. The multiplier is derived from measured
+    # geometry and the tempo active at that slider, so it tracks BPM changes too.
+    slider_velocity_points = build_slider_velocity_points(
+        beatmap.objects,
+        timing_points,
+        slider_multiplier=float(difficulty_values.slider_multiplier),
+    )
+    all_timing_points = merge_timing_points(timing_points, slider_velocity_points)
     sections = OsuWriterSections(
         general=build_general_section(
             osu_audio_filename_from_browser_path(beatmap.audio),
@@ -92,7 +107,7 @@ def export_osu_file(
         ]
         if background_filename
         else [],
-        timing_points=timing_points,
+        timing_points=all_timing_points,
         colours=colours,
         hit_objects=hit_objects,
     )
@@ -105,6 +120,11 @@ def export_osu_file(
     if len(timing_points) > 1:
         warnings.append(
             f"Multi-BPM export: {len(timing_points)} uninherited timing points emitted from detected tempo regions."
+        )
+    if slider_velocity_points:
+        warnings.append(
+            f"Slider velocity: {len(slider_velocity_points)} inherited timing point"
+            f"{'s' if len(slider_velocity_points) != 1 else ''} emitted so slider durations match their geometry."
         )
     report = OsuExportReport(
         source_json_path=map_path.as_posix(),

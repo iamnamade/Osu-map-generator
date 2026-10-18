@@ -24,6 +24,7 @@ from .slider_geometry import (
     path_end_direction,
     path_start_direction,
 )
+from .slider_geometry_fit import resolve_slider_geometry
 from .slider_models import (
     ControlPoint,
     SliderCandidate,
@@ -47,6 +48,17 @@ class SliderPipelineConfig:
     min_slider_ratio: float = 0.35  # minimum fraction of objects that must be sliders
     quality_threshold: float = 20.0  # lower quality threshold to accept more sliders
     fill_confidence_threshold: float = 0.08  # lower threshold for minimum-ratio fill pass
+    # Phase 25: geometry resolution (see slider_geometry_fit.resolve_slider_geometry).
+    curve_fit_enabled: bool = True  # resolve exact length / clamp anchors / classify family
+    # Anchor-collapse is opt-in: verifying that one cubic can replace a chain costs
+    # 0.3-1.1 ms per slider (most shapes cannot collapse, so the attempt is paid and
+    # discarded), against ~20-60 us for exact-length resolution alone.
+    curve_fit_simplify: bool = False
+    curve_fit_tolerance: float = 1.0  # max px deviation accepted by that collapse
+    # Emission length bounds. Previously inline `max(20, min(400, ...))`; kept as the
+    # same defaults so behaviour is unchanged, but no longer hardcoded in the call path.
+    min_pixel_length: int = 20
+    max_pixel_length: int = 400
 
 
 DEFAULT_SLIDER_CONFIG = SliderPipelineConfig()
@@ -374,10 +386,30 @@ def _build_slider(
     if not control_points:
         return None
 
-    pixel_length = int(round(
-        compute_slider_length(control_points, start_x, start_y, path_type)
-    ))
-    pixel_length = max(20, min(400, pixel_length))
+    # Phase 25: resolve geometry through the curve fitter — clamp anchors into the
+    # playfield (minus the preset's safety margin), measure the *emitted* path exactly
+    # instead of sampling 100 chords, and collapse a multi-anchor chain to a cubic when
+    # that is faithful. `resolve_slider_geometry` never raises; on failure it returns the
+    # clamped legacy anchors with the legacy sampled length.
+    geometry = resolve_slider_geometry(
+        start_x,
+        start_y,
+        control_points,
+        path_type,
+        margin=float(getattr(preset, "safe_margin", 0) or 0),
+        simplify_tolerance=config.curve_fit_tolerance,
+        simplify=config.curve_fit_enabled and config.curve_fit_simplify,
+    )
+    if not geometry.control_points:
+        return None
+
+    path_type = geometry.path_type
+    control_points = geometry.control_points
+    # keep the emitted tail in sync with the geometry the caller returns for flow
+    end_x, end_y = control_points[-1].x, control_points[-1].y
+    pixel_length = int(
+        round(clamp(geometry.pixel_length, config.min_pixel_length, config.max_pixel_length))
+    )
 
     repeats = candidate.preferred_repeats
 
