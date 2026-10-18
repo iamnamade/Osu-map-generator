@@ -35,6 +35,7 @@ from .pattern_scorer import (
     score_pattern_placement,
     score_pattern_set,
 )
+from ..placement.flow_dynamics import FlowEngine as FlowEngine
 from .spacing_model import (
     build_playfield_heatmap,
     compute_difficulty_spacing,

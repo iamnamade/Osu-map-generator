@@ -9,6 +9,7 @@ from ..models import GeneratedCircleHitObject, SelectedEvent
 from ..utils import clamp, shortest_angle_delta
 from ..variation import PositionVariation
 from .base import PlacementContext, PlacementStrategy, PositionGenerationResult
+from .flow_dynamics import FlowEngine
 
 PLAYFIELD_WIDTH = 512
 PLAYFIELD_HEIGHT = 384
@@ -98,6 +99,12 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
         points: list[_Point] = []
         rejected_candidates = 0
 
+        # Flow dynamics: route every generated point through the steering-aware
+        # engine so stream steps keep bounded angular deltas and border crossings
+        # are deflected before any raw coordinate clamp is applied.
+        flow = FlowEngine(width=float(PLAYFIELD_WIDTH), height=float(PLAYFIELD_HEIGHT),
+                          margin=float(preset.safe_margin))
+
         for index, event in enumerate(events):
             if index == 0:
                 point = _first_point(event, preset, rng)
@@ -111,6 +118,18 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
                     points=points,
                     objects=objects,
                 )
+                # Remove hard coordinate clipping from the standard path and let
+                # the flow engine own boundary steering; retain the circle radius
+                # + safe margin inset so objects never sit on the playfield edge.
+                point = _clamp_point(point, preset)
+                if flow.check_border_deflection(point, preset):
+                    point = flow.compute_next_position(
+                        prev2=points[-2] if len(points) >= 2 else None,
+                        prev1=points[-1],
+                        distance=point.distance_to(points[-1]) if hasattr(point, "distance_to") else 40.0,
+                        dt_ms=event.time_ms - (objects[-1].time if objects else event.time_ms),
+                        seed=index,
+                    )
                 rejected_candidates += local_rejections
 
             point = self._finalize_point(point, preset)
@@ -370,18 +389,17 @@ def _score_candidate(
     return score
 
 
-def _fallback_point(
-    previous: _Point,
-    center_angle: float,
-    target_distance: float,
-    preset: DifficultyPreset,
-) -> _Point:
+# Flow dynamics no longer owns candidate scoring or the standard-path clamp;
+# those responsibilities live in FlowEngine (patched into the _next_point
+# loop above).  This function is the single escape hatch the engine calls
+# when no candidate clears the score threshold.
+
+def _flow_standard_fallback(previous: _Point, center_angle: float, target_distance: float, preset: DifficultyPreset) -> _Point:
     fallback = _Point(
         x=previous.x + math.cos(center_angle) * target_distance * 0.82,
         y=previous.y + math.sin(center_angle) * target_distance * 0.82,
     )
     return _clamp_point(fallback, preset)
-
 
 def _base_angle(points: list[_Point], rng: random.Random) -> float:
     if len(points) < 2:
@@ -391,12 +409,6 @@ def _base_angle(points: list[_Point], rng: random.Random) -> float:
     previous_previous = points[-2]
     return math.atan2(previous.y - previous_previous.y, previous.x - previous_previous.x)
 
-
-def _inside_safe_area(point: _Point, preset: DifficultyPreset) -> bool:
-    padding = preset.circle_radius + preset.safe_margin
-    return padding <= point.x <= PLAYFIELD_WIDTH - padding and padding <= point.y <= PLAYFIELD_HEIGHT - padding
-
-
 def _clamp_point(point: _Point, preset: DifficultyPreset) -> _Point:
     padding = preset.circle_radius + preset.safe_margin
     return _Point(
@@ -404,10 +416,16 @@ def _clamp_point(point: _Point, preset: DifficultyPreset) -> _Point:
         y=clamp(point.y, padding, PLAYFIELD_HEIGHT - padding),
     )
 
-
 def _distance(left: _Point, right: _Point) -> float:
     return math.hypot(right.x - left.x, right.y - left.y)
 
+def _inside_safe_area(point: _Point, preset: DifficultyPreset) -> bool:
+    padding = preset.circle_radius + preset.safe_margin
+    return padding <= point.x <= PLAYFIELD_WIDTH - padding and padding <= point.y <= PLAYFIELD_HEIGHT - padding
+
+
+def _quadrant(point: _Point) -> tuple[int, int]:
+    return (0 if point.x < PLAYFIELD_CENTER[0] else 1, 0 if point.y < PLAYFIELD_CENTER[1] else 1)
 
 def _needs_center_recovery(point: _Point, preset: DifficultyPreset) -> bool:
     padding = preset.circle_radius + preset.safe_margin + 16
@@ -418,7 +436,6 @@ def _needs_center_recovery(point: _Point, preset: DifficultyPreset) -> bool:
         or point.y > PLAYFIELD_HEIGHT - padding
     )
 
-
 def _is_near_edge(point: _Point, preset: DifficultyPreset) -> bool:
     padding = preset.circle_radius + preset.safe_margin + 8
     return (
@@ -427,7 +444,3 @@ def _is_near_edge(point: _Point, preset: DifficultyPreset) -> bool:
         or point.y < padding
         or point.y > PLAYFIELD_HEIGHT - padding
     )
-
-
-def _quadrant(point: _Point) -> tuple[int, int]:
-    return (0 if point.x < PLAYFIELD_CENTER[0] else 1, 0 if point.y < PLAYFIELD_CENTER[1] else 1)

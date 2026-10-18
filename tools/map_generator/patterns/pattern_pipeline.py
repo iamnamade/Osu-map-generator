@@ -20,8 +20,8 @@ from ..position_generator import (
 )
 from ..utils import clamp
 from ..variation import PositionVariation
-from .spacing_model import SpacingConfig
 from .flow_engine import build_flow_diagnostic, plan_direction
+from ..placement.flow_dynamics import FlowEngine as FlowEngine
 from .pattern_library import (
     generate_arc,
     generate_back_and_forth,
@@ -48,6 +48,7 @@ from .pattern_models import (
 )
 from .pattern_scorer import score_pattern_placement
 from .spacing_model import (
+    SpacingConfig,
     compute_difficulty_spacing,
     compute_spatial_balance,
 )
@@ -117,6 +118,12 @@ def generate_pattern_positions(
         return 0.0
     def _in_kiai(time_ms: int) -> bool:
         return any(k.start_ms <= time_ms <= k.end_ms for k in kiai_sections)
+
+    # Flow dynamics: every cursor step is generated through the steering-aware
+    # engine instead of raw coordinate arithmetic, so acute snap-backs and
+    # border crossings are resolved by construction.
+    flow = FlowEngine(width=float(preset.playfield_width), height=float(preset.playfield_height),
+                      margin=float(preset.safe_margin))
 
     # Stack offset tracking for overlapping 1/2 and 1/4 beats
     beat_interval_ms = int(round(60000.0 / max(1.0, preset.target_gap_ms * 2.5)))
@@ -205,6 +212,12 @@ def generate_pattern_positions(
 
         # Generate pattern points
         pattern_points: list[_Point] = []
+
+        # Flow steering hook: every new point is produced by
+        # FlowEngine.compute_next_position, which enforces bounded angular
+        # deltas and centripetal border deflection before the point is used
+        # by any pattern.
+        engine = flow
         if chosen_pattern == "single":
             p = generate_single(
                 _Point(x=previous.x, y=previous.y),
@@ -327,10 +340,16 @@ def generate_pattern_positions(
         # Process pattern points. Each point of a multi-point pattern maps to a
         # distinct upcoming event (index + pi) so timestamps stay unique.
         for pi, pp in enumerate(pattern_points):
-            if pi == 0:
-                px, py = _apply_safety(pp.x, pp.y, previous, preset)
-            else:
-                px, py = _apply_safety(pp.x, pp.y, points[-1], preset)
+            # pp is a plain _Point (the pattern library returns positions only).
+            # The flow engine rebuilds the coordinate from prev1 with the
+            # requested Euclidean distance, applying angular flow + steering.
+            px, py = flow.compute_next_position(
+                prev2=points[-1] if pi > 0 else None,
+                prev1=points[-1],
+                distance=float(_distance(previous, pp)),
+                dt_ms=delta_ms,
+                seed=int(hash((index, pi, seed)) & 0xFFFFFFFF),
+            )
 
             clamped = _Point(x=clamp(px, 0, PLAYFIELD_WIDTH), y=clamp(py, 0, PLAYFIELD_HEIGHT))
             clamped = _clamp_point(clamped, preset)
