@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..config import DifficultyPreset
 from ..models import GeneratedCircleHitObject, SelectedEvent
@@ -11,9 +12,17 @@ from ..variation import PositionVariation
 from .base import PlacementContext, PlacementStrategy, PositionGenerationResult
 from .flow_dynamics import FlowEngine
 
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
+    from ..ml.markov_persona import MapperPersonaModel
+
 PLAYFIELD_WIDTH = 512
 PLAYFIELD_HEIGHT = 384
 PLAYFIELD_CENTER = (PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2)
+
+#: Slider velocity assumed when converting learned spacing into pixels. The
+#: placement context carries audio analysis but no timing sections, so a
+#: persona map is generated at the corpus' normalised 1.0x reference speed.
+PERSONA_SLIDER_VELOCITY = 1.0
 
 
 @dataclass(frozen=True)
@@ -34,6 +43,16 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
     name = "standard"
     mode = "osu"
 
+    def __init__(self, persona_model: "MapperPersonaModel | None" = None) -> None:
+        """Create the standard placement strategy.
+
+        Args:
+            persona_model: Optional trained mapper-style model.  When given,
+                placement is sampled from the model instead of the built-in
+                pattern/jump-curve heuristics.
+        """
+        self.persona_model = persona_model
+
     @property
     def playfield_width(self) -> float:
         return float(PLAYFIELD_WIDTH)
@@ -49,6 +68,9 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
         variation = context.variation
         pattern_config = context.pattern_config
         analysis = context.analysis
+
+        if self.persona_model is not None:
+            return self._generate_persona(context)
 
         if pattern_config is not None:
             from ..patterns.pattern_pipeline import generate_pattern_positions
@@ -83,6 +105,115 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
             seed=seed,
             variation=variation,
         )
+
+    def _generate_persona(self, context: PlacementContext) -> PositionGenerationResult:
+        """Sample object placement from a trained mapper persona.
+
+        Timing, spacing and turn come from the Markov chain rather than from
+        the selected events: the persona decides *when* the next object lands,
+        not just where.  The map therefore ends when the predicted gaps run
+        past the audio, or when it reaches the event count, whichever is first.
+
+        Border handling is unchanged from the heuristics path: the centripetal
+        deflection runs first so near-edge objects are steered inward, then the
+        final clamp guarantees the coordinates stay inside the playfield.
+        """
+        from ..ml.corpus_parser import PIXELS_PER_BEAT, angle_bin_to_degrees
+
+        model = self.persona_model
+        if model is None:  # pragma: no cover - guarded by generate()
+            raise ValueError("persona model is not configured")
+
+        preset = context.preset
+        analysis = context.analysis
+        events = context.events
+
+        bpm = float(getattr(analysis, "bpm", 0.0) or 0.0)
+        if bpm <= 0:
+            bpm = 120.0
+        beat_ms = 60_000.0 / bpm
+
+        start_ms = int(preset.start_padding_ms)
+        duration_ms = int(getattr(analysis, "duration_ms", 0) or 0)
+        if duration_ms > 0:
+            end_ms = duration_ms - int(preset.end_padding_ms)
+        elif events:
+            end_ms = int(events[-1].time_ms)
+        else:
+            end_ms = start_ms + 60_000
+
+        flow = FlowEngine(
+            width=float(PLAYFIELD_WIDTH),
+            height=float(PLAYFIELD_HEIGHT),
+            margin=float(preset.safe_margin),
+        )
+
+        target_objects = max(1, len(events))
+        min_gap_ms = max(1.0, float(preset.min_gap_ms))
+
+        objects: list[GeneratedCircleHitObject] = []
+        point = _Point(x=PLAYFIELD_CENTER[0], y=PLAYFIELD_CENTER[1])
+        heading = 0.0
+        current_time = start_ms
+        previous_state = None
+        current_state = model.sample_initial_state()
+
+        while len(objects) < target_objects:
+            next_state = model.predict_next_state(current_state, previous_state)
+
+            gap_ms = max(min_gap_ms, next_state.delta_beats * beat_ms)
+            object_time = int(round(current_time + gap_ms))
+            if object_time > end_ms:
+                break
+
+            # Learned spacing is in beats of travel; convert back to pixels.
+            spacing_px = max(0.0, next_state.spacing) * PIXELS_PER_BEAT * PERSONA_SLIDER_VELOCITY
+            max_distance = preset.max_cursor_speed * (gap_ms / 1000.0)
+            distance = clamp(
+                spacing_px,
+                preset.min_jump_distance,
+                min(preset.max_jump_distance, max_distance),
+            )
+            if distance <= 0:
+                distance = preset.min_jump_distance
+
+            heading += math.radians(angle_bin_to_degrees(next_state.angle_bin))
+            candidate = _Point(
+                x=point.x + math.cos(heading) * distance,
+                y=point.y + math.sin(heading) * distance,
+            )
+            deflected = flow.check_border_deflection((candidate.x, candidate.y), preset)
+            point = self._finalize_point(_Point(x=deflected[0], y=deflected[1]), preset)
+
+            objects.append(
+                GeneratedCircleHitObject(
+                    id=len(objects) + 1,
+                    type="circle",
+                    x=int(round(point.x)),
+                    y=int(round(point.y)),
+                    time=object_time,
+                )
+            )
+
+            previous_state = current_state
+            current_state = next_state
+            current_time = object_time
+
+        # A persona whose every sampled gap exceeds the track length would
+        # otherwise yield an empty (invalid) map.
+        if not objects and end_ms > start_ms:
+            point = self._finalize_point(point, preset)
+            objects.append(
+                GeneratedCircleHitObject(
+                    id=1,
+                    type="circle",
+                    x=int(round(point.x)),
+                    y=int(round(point.y)),
+                    time=min(int(round(start_ms + min_gap_ms)), end_ms),
+                )
+            )
+
+        return PositionGenerationResult(objects=objects, rejected_candidates=0)
 
     def _generate_classic(
         self,
