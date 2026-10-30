@@ -122,7 +122,7 @@ def generate_pattern_positions(
     # Flow dynamics: every cursor step is generated through the steering-aware
     # engine instead of raw coordinate arithmetic, so acute snap-backs and
     # border crossings are resolved by construction.
-    flow = FlowEngine(width=float(preset.playfield_width), height=float(preset.playfield_height),
+    flow = FlowEngine(width=float(PLAYFIELD_WIDTH), height=float(PLAYFIELD_HEIGHT),
                       margin=float(preset.safe_margin))
 
     # Stack offset tracking for overlapping 1/2 and 1/4 beats

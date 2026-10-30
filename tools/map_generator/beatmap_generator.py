@@ -367,6 +367,19 @@ def generate_beatmap_from_analysis(
                         f"[slider] Post-density slider enforcement failed: {exc}"
                     )
 
+    # ---- Phase 25: Smart hitsounding (multi-band transient classification) ----
+    # Runs last so every committed object -- including density fills and
+    # post-density slider conversions -- is classified exactly once.
+    positioned, hitsound_stats = _apply_smart_hitsounds(
+        positioned=positioned,
+        audio_path=audio_path,
+        raw_samples=raw_samples,
+        raw_sample_rate=raw_sample_rate,
+        generation_warnings=generation_warnings,
+    )
+    if hitsound_stats:
+        generator_payload_extra = {**generator_payload_extra, **hitsound_stats}
+
     browser_audio_path = resolve_browser_audio_path(
         audio_source_path=audio_path,
         project_root=project_root,
@@ -793,6 +806,94 @@ def _enforce_density_minimum(
     return PositionGenerationResult(
         objects=objects,
         rejected_candidates=positioned.rejected_candidates,
+    )
+
+
+def _apply_smart_hitsounds(
+    *,
+    positioned: PositionGenerationResult,
+    audio_path: Path,
+    raw_samples: np.ndarray | None,
+    raw_sample_rate: int | None,
+    generation_warnings: list[str],
+) -> tuple[PositionGenerationResult, dict[str, Any]]:
+    """Assign osu! hitsound bitmasks from multi-band transient analysis.
+
+    Each hit circle takes the bitmask resolved for its own timestamp; sliders
+    take the start bitmask in ``hitSound`` and, when the tail coincides with a
+    transient, record the tail mask as ``sliderTailHitSound`` for the exporter.
+    Spinners are skipped -- they have no hitsound sample in the .osu format.
+
+    An object whose mask is ``0`` (Normal, the format default) is left
+    untouched so generated JSON does not grow an ``osu`` block on every
+    object.  Analysis failures degrade to a warning, matching the slider,
+    spinner, and rhythm phases.
+    """
+    if not positioned.objects:
+        return positioned, {}
+
+    try:
+        from .rhythm.hitsound_analyzer import HitsoundAnalyzer
+
+        # Reuse the samples already decoded for the rhythm phases instead of
+        # decoding the track a second time.
+        reuse_samples = raw_samples is not None and bool(raw_sample_rate)
+        analyzer = HitsoundAnalyzer(
+            audio_path.as_posix(),
+            samples=raw_samples if reuse_samples else None,
+            sample_rate=raw_sample_rate if reuse_samples else None,
+        )
+    except Exception as exc:
+        generation_warnings.append(f"[hitsound] Transient analysis unavailable: {exc}")
+        return positioned, {}
+
+    updated_objects: list[GeneratedHitObject] = []
+    tagged = 0
+    changed = False
+
+    for obj in positioned.objects:
+        if obj.type == "spinner":
+            updated_objects.append(obj)
+            continue
+
+        time_ms = float(obj.time)
+        mask = analyzer.get_hitsound_bitmask(time_ms)
+        osu_metadata = dict(obj.extra_fields.get("osu") or {})
+        object_changed = False
+
+        if mask != 0:
+            osu_metadata["hitSound"] = int(mask)
+            tagged += 1
+            object_changed = True
+
+        if obj.type == "slider":
+            tail_mask = analyzer.get_hitsound_bitmask(float(obj.end_time))
+            if tail_mask != 0:
+                osu_metadata["sliderTailHitSound"] = int(tail_mask)
+                object_changed = True
+
+        if not object_changed:
+            updated_objects.append(obj)
+            continue
+
+        extra_fields = dict(obj.extra_fields)
+        extra_fields["osu"] = osu_metadata
+        updated_objects.append(replace_dataclass(obj, extra_fields=extra_fields))
+        changed = True
+
+    if not changed:
+        return positioned, {}
+
+    stats: dict[str, Any] = {
+        "hitsoundTaggedObjects": tagged,
+        "hitsoundOnsetCounts": analyzer.onset_counts(),
+    }
+    return (
+        PositionGenerationResult(
+            objects=updated_objects,
+            rejected_candidates=positioned.rejected_candidates,
+        ),
+        stats,
     )
 
 

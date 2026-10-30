@@ -35,6 +35,20 @@ Point = Tuple[float, float]
 _MIN_PENALTY_STEP = 0.01
 
 
+def _as_point(value: object) -> Point | None:
+    """Normalise a caller-supplied point to a plain ``(x, y)`` tuple.
+
+    Placement callers pass ``_Point`` dataclasses while this engine's
+    documented contract is tuples.  Accepting both at the public boundary
+    keeps the internals indexing and unpacking tuples only.
+    """
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        return (float(value[0]), float(value[1]))
+    return (float(getattr(value, "x")), float(getattr(value, "y")))
+
+
 class FlowEngine:
     """Steering-aware coordinate generator.
 
@@ -88,6 +102,10 @@ class FlowEngine:
             ``(x, y)`` inside the playfield, with
             ``math.dist(prev1, result) == distance`` (within float rounding).
         """
+        prev1 = _as_point(prev1)
+        prev2 = _as_point(prev2)
+        assert prev1 is not None
+
         # Deterministic angular delta:
         #   * stream steps (dt_ms <= 150): a continuous sweep between 15 and 35
         #     degrees from the incoming direction;
@@ -266,10 +284,16 @@ class FlowEngine:
                 vy = math.sin(angle) * distance
                 norm = distance
             if norm <= 1e-6:
-                # Fallback: return the current position unchanged; the engine
-                # still satisfies the distance contract (zero distance stays
-                # at prev1, and no further navigation is possible).
-                return (prev1[0] + vx, prev1[1] + vy)
+                # prev1 and candidate coincide; approach the centre from
+                # the deterministic radial of the current position.
+                angle = math.atan2(vy, vx) if (vx != 0 or vy != 0) else 0.0
+                vx = math.cos(angle) * distance
+                vy = math.sin(angle) * distance
+                norm = distance
+            if norm <= 1e-6:
+                # Zero-length fallback: return the playfield centre exactly.
+                return (self.center[0], self.center[1])
+
             ux, uy = vx / norm, vy / norm
 
         # 2. Determine whether centripetal steering is needed.
