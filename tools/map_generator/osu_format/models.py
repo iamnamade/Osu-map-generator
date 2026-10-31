@@ -390,6 +390,8 @@ class OsuMapsetExportResult:
 class OszPackageResult:
     output_path: str
     archived_files: list[str]
+    #: Non-fatal notes (e.g. lyrics skipped because Whisper is unavailable).
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
