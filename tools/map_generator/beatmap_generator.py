@@ -9,6 +9,10 @@ import numpy as np
 
 from dataclasses import replace as replace_dataclass
 
+from .analysis.cursor_physics import (
+    MAX_CURSOR_VELOCITY_PX_PER_MS,
+    AutoPlaySimulator,
+)
 from .audio_analyzer import analyze_audio
 from ..text_utils import normalize_unicode_text
 from .config import DifficultyPreset, get_difficulty_preset
@@ -379,6 +383,50 @@ def generate_beatmap_from_analysis(
     )
     if hitsound_stats:
         generator_payload_extra = {**generator_payload_extra, **hitsound_stats}
+
+    # ---- Phase 26: Virtual cursor auto-play simulation ----
+    # Runs on the final object list, so density fills, slider conversions and
+    # hitsound passes are all accounted for. A jump no cursor can reach is
+    # clamped in place and the map re-measured, so the shipped star rating
+    # describes the map the player actually downloads.
+    simulator = AutoPlaySimulator()
+    simulation = simulator.simulate_playthrough(
+        [item.to_dict() for item in positioned.objects]
+    )
+    if not simulation["playable"]:
+        nerfed_payloads, nerfed_count = simulator.nerf_unplayable(
+            [item.to_dict() for item in positioned.objects]
+        )
+        rebuilt_objects: list[Any] = []
+        for current, nerfed_payload in zip(positioned.objects, nerfed_payloads):
+            if (
+                isinstance(nerfed_payload, dict)
+                and "x" in nerfed_payload
+                and "y" in nerfed_payload
+                and hasattr(current, "x")
+            ):
+                nerfed_x = int(nerfed_payload["x"])
+                nerfed_y = int(nerfed_payload["y"])
+                if (nerfed_x, nerfed_y) != (current.x, current.y):
+                    current = replace_dataclass(current, x=nerfed_x, y=nerfed_y)
+            rebuilt_objects.append(current)
+        positioned = PositionGenerationResult(
+            objects=rebuilt_objects,
+            rejected_candidates=positioned.rejected_candidates,
+        )
+        simulation = simulator.simulate_playthrough(
+            [item.to_dict() for item in positioned.objects]
+        )
+        simulation["nerfedObjects"] = nerfed_count
+        generation_warnings.append(
+            f"[physics] Nerfed {nerfed_count} jump(s) above the "
+            f"{MAX_CURSOR_VELOCITY_PX_PER_MS:.0f} px/ms cursor speed limit."
+        )
+    generator_payload_extra = {
+        **generator_payload_extra,
+        "predictedStarRating": simulation["predictedStarRating"],
+        "cursorSimulation": simulation,
+    }
 
     browser_audio_path = resolve_browser_audio_path(
         audio_source_path=audio_path,
