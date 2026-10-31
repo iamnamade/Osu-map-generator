@@ -14,6 +14,7 @@ from .flow_dynamics import FlowEngine
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from ..ml.markov_persona import MapperPersonaModel
+    from ..rhythm.spectral_analyzer import AudioEngine
 
 PLAYFIELD_WIDTH = 512
 PLAYFIELD_HEIGHT = 384
@@ -43,15 +44,39 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
     name = "standard"
     mode = "osu"
 
-    def __init__(self, persona_model: "MapperPersonaModel | None" = None) -> None:
+    def __init__(
+        self,
+        persona_model: "MapperPersonaModel | None" = None,
+        audio_engine: "AudioEngine | None" = None,
+    ) -> None:
         """Create the standard placement strategy.
 
         Args:
             persona_model: Optional trained mapper-style model.  When given,
                 placement is sampled from the model instead of the built-in
                 pattern/jump-curve heuristics.
+            audio_engine: Optional spectral engine.  When given, jump spacing is
+                scaled by the passage intensity (0.5 for verses, 2.0 for drops),
+                so the map breathes with the music instead of holding one
+                density for the whole track.
         """
         self.persona_model = persona_model
+        self.audio_engine = audio_engine
+
+    def _intensity_at(self, time_ms: int) -> float:
+        """Intensity multiplier at ``time_ms``, clamped to the documented band.
+
+        Returns a neutral ``1.0`` without an engine, and also when a lookup
+        fails: a missing analysis frame must not abort placement.
+        """
+        engine = self.audio_engine
+        if engine is None:
+            return 1.0
+        try:
+            value = float(engine.intensity_at(float(time_ms)))
+        except (AttributeError, TypeError, ValueError):
+            return 1.0
+        return clamp(value, 0.5, 2.0)
 
     @property
     def playfield_width(self) -> float:
@@ -163,7 +188,14 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
                 break
 
             # Learned spacing is in beats of travel; convert back to pixels.
-            spacing_px = max(0.0, next_state.spacing) * PIXELS_PER_BEAT * PERSONA_SLIDER_VELOCITY
+            # The passage intensity scales the jump, so the persona keeps its
+            # signature shape while the map still breathes with the song.
+            spacing_px = (
+                max(0.0, next_state.spacing)
+                * PIXELS_PER_BEAT
+                * PERSONA_SLIDER_VELOCITY
+                * self._intensity_at(object_time)
+            )
             max_distance = preset.max_cursor_speed * (gap_ms / 1000.0)
             distance = clamp(
                 spacing_px,
@@ -245,6 +277,7 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
                     rng=rng,
                     points=points,
                     objects=objects,
+                    intensity=self._intensity_at(event.time_ms),
                 )
                 # Remove hard coordinate clipping from the standard path and let
                 # the flow engine own boundary steering; retain the circle radius
@@ -300,6 +333,7 @@ def _next_point(
     rng: random.Random,
     points: list[_Point],
     objects: list[GeneratedCircleHitObject],
+    intensity: float = 1.0,
 ) -> tuple[_Point, int]:
     previous = points[-1]
     previous_event_time = objects[-1].time
@@ -315,7 +349,7 @@ def _next_point(
     preferred_distance = preset.preferred_jump_distance * profile.preferred_jump_distance_multiplier
 
     target_distance = clamp(
-        preferred_distance * distance_scale * energy_scale * strength_scale,
+        preferred_distance * distance_scale * energy_scale * strength_scale * clamp(intensity, 0.5, 2.0),
         preset.min_jump_distance,
         min(preset.max_jump_distance, max_distance_by_speed),
     )

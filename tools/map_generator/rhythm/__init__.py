@@ -13,8 +13,10 @@ from .rhythm_pipeline import (
     build_rhythm_model,
     select_rhythmic_timings,
 )
+from .spectral_analyzer import AudioEngine
 
 __all__ = [
+    "AudioEngine",
     "BpmRegion",
     "PhraseInfo",
     "RhythmDiagnostics",

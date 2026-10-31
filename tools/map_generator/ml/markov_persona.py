@@ -36,7 +36,8 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from .corpus_parser import PatternState
+from ..utils import MapGeneratorError
+from .corpus_parser import OsuCorpusParser, PatternState
 
 StateLike = PatternState | tuple[float, float, int]
 
@@ -230,4 +231,94 @@ class MapperPersonaModel:
             "firstOrderTransitions": len(self._first_table),
             "initialStates": len(self._starts),
             "observations": sum(len(items) for items in self.transitions.values()),
+        }
+
+
+class MapperPersona:
+    """A named mapper's style: corpus directory in, next state out.
+
+    Thin facade over :class:`OsuCorpusParser` (directory -> state sequences) and
+    :class:`MapperPersonaModel` (sequences -> sampled transitions).  It exists so
+    callers can say "train on Sotarks" and "what comes next?" without knowing
+    about state encoding or transition tables, and so the placement strategy can
+    accept a persona without importing the modelling internals.
+
+    Usage::
+
+        persona = MapperPersona(train=...)
+        persona.train("corpora/sotarks/")
+        next_state = persona.predict_next([state_n_minus_1, state_n])
+
+    Parameters
+    ----------
+    seed:
+        Seed for transition sampling; identical corpora and seeds reproduce
+        identical maps.
+    parser:
+        Optional corpus parser (e.g. a custom spacing quantum).
+    """
+
+    def __init__(
+        self,
+        *,
+        seed: int | None = None,
+        parser: OsuCorpusParser | None = None,
+    ) -> None:
+        self.parser = parser or OsuCorpusParser()
+        self._model = MapperPersonaModel(seed=seed)
+        self.corpus_directory: str | None = None
+
+    def train(self, osu_file_directory: str) -> "MapperPersona":
+        """Learn this persona from every ``.osu`` file in a directory.
+
+        Raises ``MapGeneratorError`` when the directory yields no usable
+        sequences, so a mistyped corpus path fails loudly instead of producing
+        a persona that silently samples uniform noise.
+        """
+        sequences = self.parser.parse_directory(osu_file_directory)
+        if not sequences:
+            raise MapGeneratorError(
+                f"No usable .osu files with hit-object sequences in {osu_file_directory}"
+            )
+        self._model.train(sequences)
+        self.corpus_directory = osu_file_directory
+        return self
+
+    def predict_next(self, prev_states: Sequence[StateLike | None]) -> PatternState:
+        """Sample the next state given the previous one or two states.
+
+        ``prev_states`` is the tail of the chain, oldest first: two entries use
+        the exact 2nd-order context, one entry falls back to the 1st-order chain,
+        and an empty sequence samples a corpus opening state.
+        """
+        states = [state for state in prev_states if state is not None]
+        if not states:
+            return self._model.sample_initial_state()
+        current = states[-1]
+        previous = states[-2] if len(states) >= 2 else None
+        return self._model.predict_next_state(current, previous)
+
+    # The placement strategy speaks the model's names; keep both available so a
+    # persona and a bare model are interchangeable there.
+    def predict_next_state(
+        self,
+        current_state: StateLike | None,
+        previous_state: StateLike | None,
+    ) -> PatternState:
+        return self._model.predict_next_state(current_state, previous_state)
+
+    def sample_initial_state(self) -> PatternState:
+        return self._model.sample_initial_state()
+
+    @property
+    def model(self) -> MapperPersonaModel:
+        """The underlying transition model (for inspection/reporting)."""
+        return self._model
+
+    def summary(self) -> dict[str, object]:
+        """Corpus plus model description."""
+        return {
+            "corpus": self.corpus_directory or "",
+            "filesParsed": int(self.parser.report.get("filesParsed", 0)),
+            **self._model.summary(),
         }
