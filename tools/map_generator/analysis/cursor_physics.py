@@ -57,10 +57,10 @@ PEAK_WINDOW = 5
 PEAK_FRACTION = 0.25
 
 #: Saturating scales for the star mapping.  These are calibration constants, not
-#: physical laws: they place a ~150 px / 250 ms jump map near 4.3 stars and a
-#: 100 px / 140 ms stream near 5.1, matching how those patterns read in game.
-#: They were fitted against those two reference patterns rather than derived, so
-#: treat the result as a comparative estimate, not an official SR.
+#: physical laws; they were fitted so uniform reference patterns read the way
+#: they do in game: 150 px jumps every 250 ms land near 3.5 stars, a 100 px /
+#: 180 ms stream near 4.5, and a 100 px / 140 ms stream near 6.1.  Treat the
+#: output as a comparative estimate, not an official SR.
 AIM_STAR_CEILING = 5.2  # peak aim strain (px/ms) treated as 10 stars
 SPEED_STAR_CEILING_PER_S = 20.0  # peak speed strain (1/s) treated as 10 stars
 STAR_EXPONENT = 0.72
