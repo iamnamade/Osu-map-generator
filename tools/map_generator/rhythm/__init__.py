@@ -14,10 +14,14 @@ from .rhythm_pipeline import (
     select_rhythmic_timings,
 )
 from .spectral_analyzer import AudioEngine
+from .stem_analyzer import MultiStemAnalyzer
+from .stem_separator import StemSeparator
 
 __all__ = [
     "AudioEngine",
     "BpmRegion",
+    "MultiStemAnalyzer",
+    "StemSeparator",
     "PhraseInfo",
     "RhythmDiagnostics",
     "RhythmModel",

@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..config import DifficultyPreset
-from ..models import GeneratedCircleHitObject, SelectedEvent
+from ..models import (
+    GeneratedCircleHitObject,
+    GeneratedHitObject,
+    GeneratedSliderHitObject,
+    HitObjectPoint,
+    SelectedEvent,
+)
 from ..utils import clamp, shortest_angle_delta
 from ..variation import PositionVariation
 from .base import PlacementContext, PlacementStrategy, PositionGenerationResult
@@ -15,6 +21,7 @@ from .flow_dynamics import FlowEngine
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from ..ml.markov_persona import MapperPersonaModel
     from ..rhythm.spectral_analyzer import AudioEngine
+    from ..rhythm.stem_analyzer import MultiStemAnalyzer
 
 PLAYFIELD_WIDTH = 512
 PLAYFIELD_HEIGHT = 384
@@ -24,6 +31,16 @@ PLAYFIELD_CENTER = (PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2)
 #: placement context carries audio analysis but no timing sections, so a
 #: persona map is generated at the corpus' normalised 1.0x reference speed.
 PERSONA_SLIDER_VELOCITY = 1.0
+
+#: Distance multipliers by dominant stem: drums open the spacing into jumps,
+#: bass tightens it into streams, vocals sit close to neutral because the
+#: object itself is a slider.
+STEM_JUMP_MULTIPLIER = 1.35
+STEM_STREAM_MULTIPLIER = 0.62
+STEM_VOCAL_MULTIPLIER = 0.95
+
+#: A vocal phrase shorter than this is a blip, not a slider.
+STEM_SLIDER_MIN_MS = 220.0
 
 
 @dataclass(frozen=True)
@@ -48,6 +65,7 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
         self,
         persona_model: "MapperPersonaModel | None" = None,
         audio_engine: "AudioEngine | None" = None,
+        stem_analyzer: "MultiStemAnalyzer | None" = None,
     ) -> None:
         """Create the standard placement strategy.
 
@@ -59,9 +77,15 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
                 scaled by the passage intensity (0.5 for verses, 2.0 for drops),
                 so the map breathes with the music instead of holding one
                 density for the whole track.
+            stem_analyzer: Optional per-instrument analyser.  When given, the
+                dominant stem at each event decides the object: vocals become
+                sliders held for the phrase length, drums become wider jumps,
+                bass becomes tighter stream spacing.  Takes precedence over the
+                persona and pattern paths.
         """
         self.persona_model = persona_model
         self.audio_engine = audio_engine
+        self.stem_analyzer = stem_analyzer
 
     def _intensity_at(self, time_ms: int) -> float:
         """Intensity multiplier at ``time_ms``, clamped to the documented band.
@@ -93,6 +117,9 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
         variation = context.variation
         pattern_config = context.pattern_config
         analysis = context.analysis
+
+        if self.stem_analyzer is not None:
+            return self._generate_stem_driven(context)
 
         if self.persona_model is not None:
             return self._generate_persona(context)
@@ -243,6 +270,191 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
             )
 
         return PositionGenerationResult(objects=objects, rejected_candidates=0)
+
+    def _generate_stem_driven(self, context: PlacementContext) -> PositionGenerationResult:
+        """Place objects according to whichever stem leads each passage.
+
+        Vocals become sliders held for the vocal phrase length, drums widen the
+        jump, bass tightens it into stream spacing.  Coordinates still come from
+        the flow engine, so angular smoothness and centripetal border steering
+        apply exactly as in the heuristic path.
+        """
+        analyzer = self.stem_analyzer
+        if analyzer is None:  # pragma: no cover - guarded by generate()
+            raise ValueError("stem analyzer is not configured")
+
+        events = context.events
+        preset = context.preset
+        seed = context.seed
+        if not events:
+            return PositionGenerationResult(objects=[], rejected_candidates=0)
+
+        flow = FlowEngine(
+            width=float(PLAYFIELD_WIDTH),
+            height=float(PLAYFIELD_HEIGHT),
+            margin=float(preset.safe_margin),
+        )
+        rng = random.Random(seed ^ 0x5EED)
+
+        objects: list[GeneratedHitObject] = []
+        recent: list[_Point] = [_Point(x=PLAYFIELD_CENTER[0], y=PLAYFIELD_CENTER[1])]
+        fallback_gap = max(float(preset.target_gap_ms), float(preset.min_gap_ms))
+
+        for index, event in enumerate(events):
+            time_ms = int(event.time_ms)
+            delta_ms = (
+                max(1.0, float(time_ms - int(events[index - 1].time_ms)))
+                if index > 0
+                else fallback_gap
+            )
+
+            instrument = analyzer.get_dominant_instrument(time_ms)
+            intensity = self._intensity_at(time_ms)
+
+            base_distance = preset.preferred_jump_distance * clamp(intensity, 0.5, 2.0)
+            if instrument == "drums" and analyzer.is_drum_hit(time_ms):
+                base_distance *= STEM_JUMP_MULTIPLIER
+            elif instrument == "bass":
+                base_distance *= STEM_STREAM_MULTIPLIER
+            elif instrument == "vocals":
+                base_distance *= STEM_VOCAL_MULTIPLIER
+
+            max_by_speed = preset.max_cursor_speed * (delta_ms / 1000.0)
+            distance = clamp(
+                base_distance,
+                preset.min_jump_distance,
+                min(preset.max_jump_distance, max_by_speed),
+            )
+            if distance <= 0:
+                distance = preset.min_jump_distance
+
+            prev1 = recent[-1]
+            prev2 = recent[-2] if len(recent) >= 2 else None
+            candidate = flow.compute_next_position(
+                prev2=None if prev2 is None else (prev2.x, prev2.y),
+                prev1=(prev1.x, prev1.y),
+                distance=distance,
+                dt_ms=delta_ms,
+                seed=seed + index,
+            )
+            steered = flow.check_border_deflection(candidate, preset)
+            point = self._finalize_point(_Point(x=steered[0], y=steered[1]), preset)
+
+            next_gap_ms = (
+                int(events[index + 1].time_ms) - time_ms
+                if index + 1 < len(events)
+                else None
+            )
+            slider = None
+            if instrument == "vocals":
+                slider = self._build_vocal_slider(
+                    head=point,
+                    time_ms=time_ms,
+                    index=index,
+                    analyzer=analyzer,
+                    preset=preset,
+                    rng=rng,
+                    next_gap_ms=next_gap_ms,
+                )
+
+            if slider is not None:
+                objects.append(slider)
+                tail = slider.control_points[-1]
+                recent.append(point)
+                recent.append(_Point(x=float(tail.x), y=float(tail.y)))
+            else:
+                objects.append(
+                    GeneratedCircleHitObject(
+                        id=len(objects) + 1,
+                        type="circle",
+                        x=int(round(point.x)),
+                        y=int(round(point.y)),
+                        time=time_ms,
+                    )
+                )
+                recent.append(point)
+
+        return PositionGenerationResult(objects=objects, rejected_candidates=0)
+
+    def _build_vocal_slider(
+        self,
+        *,
+        head: _Point,
+        time_ms: int,
+        index: int,
+        analyzer: "MultiStemAnalyzer",
+        preset: DifficultyPreset,
+        rng: random.Random,
+        next_gap_ms: int | None,
+    ) -> GeneratedSliderHitObject | None:
+        """Emit a bezier slider held for as long as the vocal phrase sustains."""
+        # Lazy imports: the slider package imports position_generator, which
+        # imports this module.
+        from ..sliders.procedural_art import ART_SHAPES, SliderArtGenerator
+        from ..sliders.slider_geometry_fit import resolve_slider_geometry
+        from ..sliders.slider_models import ControlPoint
+
+        sustain_ms = analyzer.get_vocal_sustain_length(time_ms)
+        if sustain_ms < STEM_SLIDER_MIN_MS:
+            return None
+
+        duration_ms = min(float(sustain_ms), 1_500.0)
+        if next_gap_ms is not None:
+            duration_ms = min(duration_ms, max(STEM_SLIDER_MIN_MS, float(next_gap_ms) - 10.0))
+        if duration_ms < STEM_SLIDER_MIN_MS:
+            return None
+
+        margin = float(preset.safe_margin)
+        generator = SliderArtGenerator(rng=rng, margin=margin)
+        target_pixels = clamp(
+            duration_ms * 0.12,
+            float(preset.min_jump_distance),
+            float(preset.max_jump_distance),
+        )
+        scale = clamp(target_pixels * 0.6, 24.0, 96.0)
+
+        points: list[tuple[float, float]] | None = None
+        if duration_ms >= 900.0:
+            shape = rng.choice(ART_SHAPES)
+            ceiling = generator.fit_scale_to_head(shape, head.x, head.y, scale)
+            if ceiling >= 24.0:
+                points = generator.align_to_head(
+                    generator.generate_shape(shape, head.x, head.y, scale=ceiling),
+                    head.x,
+                    head.y,
+                )
+        if points is None:
+            points = _bezier_arc(head, target_pixels, rng)
+
+        anchors = [ControlPoint(x=int(round(x)), y=int(round(y))) for x, y in points]
+        if len(anchors) < 2:
+            return None
+
+        geometry = resolve_slider_geometry(
+            int(round(head.x)),
+            int(round(head.y)),
+            anchors,
+            "bezier",
+            margin=margin,
+            simplify=False,
+        )
+        if not geometry.control_points:
+            return None
+
+        return GeneratedSliderHitObject(
+            id=index + 1,
+            type="slider",
+            x=int(round(head.x)),
+            y=int(round(head.y)),
+            time=time_ms,
+            end_time=time_ms + int(round(duration_ms)),
+            path_type=geometry.path_type,
+            control_points=[
+                HitObjectPoint(x=point.x, y=point.y) for point in geometry.control_points
+            ],
+            repeats=1,
+            pixel_length=int(round(clamp(geometry.pixel_length, 20.0, 400.0))),
+        )
 
     def _generate_classic(
         self,
@@ -631,6 +843,19 @@ def _deflect_into_bounds(
             return pulled
 
     return _Point(*PLAYFIELD_CENTER)
+
+
+def _bezier_arc(head: _Point, length: float, rng: random.Random) -> list[tuple[float, float]]:
+    """Three-anchor bowed bezier from ``head`` for short vocal phrases."""
+    angle = rng.uniform(0.0, math.tau)
+    travel = max(1.0, length)
+    bow = rng.uniform(0.25, 0.55) * travel
+    end = _Point(x=head.x + math.cos(angle) * travel, y=head.y + math.sin(angle) * travel)
+    mid = _Point(
+        x=(head.x + end.x) * 0.5 + math.cos(angle + math.pi / 2.0) * bow,
+        y=(head.y + end.y) * 0.5 + math.sin(angle + math.pi / 2.0) * bow,
+    )
+    return [(head.x, head.y), (mid.x, mid.y), (end.x, end.y)]
 
 
 def _clamp_point(point: _Point, preset: DifficultyPreset) -> _Point:

@@ -20,6 +20,7 @@ desktop.ini
 # Runtime output (generated artifacts, not source)
 public/
 workspaces/
+.workspaces/
 exports/
 
 # OS junk
