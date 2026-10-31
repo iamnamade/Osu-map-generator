@@ -114,9 +114,11 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
         not just where.  The map therefore ends when the predicted gaps run
         past the audio, or when it reaches the event count, whichever is first.
 
-        Border handling is unchanged from the heuristics path: the centripetal
-        deflection runs first so near-edge objects are steered inward, then the
-        final clamp guarantees the coordinates stay inside the playfield.
+        Border handling mirrors the heuristics path: a sample that leaves the
+        playfield is deflected centripetally -- rotated toward the centre at the
+        sampled spacing, shortened only when the geometry makes that impossible
+        -- instead of being hard-clipped, which would silently rewrite the
+        trained angle.  The final clamp still guarantees in-bounds coordinates.
         """
         from ..ml.corpus_parser import PIXELS_PER_BEAT, angle_bin_to_degrees
 
@@ -141,12 +143,6 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
             end_ms = int(events[-1].time_ms)
         else:
             end_ms = start_ms + 60_000
-
-        flow = FlowEngine(
-            width=float(PLAYFIELD_WIDTH),
-            height=float(PLAYFIELD_HEIGHT),
-            margin=float(preset.safe_margin),
-        )
 
         target_objects = max(1, len(events))
         min_gap_ms = max(1.0, float(preset.min_gap_ms))
@@ -182,8 +178,9 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
                 x=point.x + math.cos(heading) * distance,
                 y=point.y + math.sin(heading) * distance,
             )
-            deflected = flow.check_border_deflection((candidate.x, candidate.y), preset)
-            point = self._finalize_point(_Point(x=deflected[0], y=deflected[1]), preset)
+            point = self._finalize_point(
+                _deflect_into_bounds(candidate, point, preset), preset
+            )
 
             objects.append(
                 GeneratedCircleHitObject(
@@ -539,6 +536,68 @@ def _base_angle(points: list[_Point], rng: random.Random) -> float:
     previous = points[-1]
     previous_previous = points[-2]
     return math.atan2(previous.y - previous_previous.y, previous.x - previous_previous.x)
+
+#: Angular resolution of the out-of-bounds deflection sweep.
+_DEFLECTION_STEPS = 16
+
+
+def _inside_padded(point: _Point, padding: float) -> bool:
+    """Whether ``point`` keeps its circle radius clear of the playfield edge."""
+    return (
+        padding <= point.x <= PLAYFIELD_WIDTH - padding
+        and padding <= point.y <= PLAYFIELD_HEIGHT - padding
+    )
+
+
+def _deflect_into_bounds(
+    candidate: _Point, anchor: _Point, preset: DifficultyPreset
+) -> _Point:
+    """Apply centripetal deflection to a persona sample that left the field.
+
+    The persona chain dictates both the turn and the spacing, so a sample can
+    land outside the playfield.  Clipping such a point would compress the jump
+    and discard the learned angle; instead the step vector is rotated toward
+    the playfield centre in small increments, preserving the sampled distance.
+    Only when no angle at that distance fits -- a jump longer than the field can
+    hold from ``anchor`` -- is the distance shortened along the centre-ward
+    radial, which is a pure centripetal pull.
+    """
+    padding = preset.circle_radius + preset.safe_margin
+    if _inside_padded(candidate, padding):
+        return candidate
+
+    offset_x = candidate.x - anchor.x
+    offset_y = candidate.y - anchor.y
+    distance = math.hypot(offset_x, offset_y)
+    if distance < 1e-6:
+        return _clamp_point(candidate, preset)
+
+    start_angle = math.atan2(offset_y, offset_x)
+    center_angle = math.atan2(
+        PLAYFIELD_CENTER[1] - anchor.y, PLAYFIELD_CENTER[0] - anchor.x
+    )
+    swing = shortest_angle_delta(start_angle, center_angle)
+
+    for step in range(1, _DEFLECTION_STEPS + 1):
+        angle = start_angle + swing * (step / _DEFLECTION_STEPS)
+        rotated = _Point(
+            x=anchor.x + math.cos(angle) * distance,
+            y=anchor.y + math.sin(angle) * distance,
+        )
+        if _inside_padded(rotated, padding):
+            return rotated
+
+    for step in range(_DEFLECTION_STEPS, 0, -1):
+        reach = distance * (step / _DEFLECTION_STEPS)
+        pulled = _Point(
+            x=anchor.x + math.cos(center_angle) * reach,
+            y=anchor.y + math.sin(center_angle) * reach,
+        )
+        if _inside_padded(pulled, padding):
+            return pulled
+
+    return _Point(*PLAYFIELD_CENTER)
+
 
 def _clamp_point(point: _Point, preset: DifficultyPreset) -> _Point:
     padding = preset.circle_radius + preset.safe_margin
