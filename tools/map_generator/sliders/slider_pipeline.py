@@ -25,6 +25,7 @@ from .slider_geometry import (
     path_start_direction,
 )
 from .slider_geometry_fit import resolve_slider_geometry
+from .procedural_art import ART_SHAPES, SliderArtGenerator
 from .slider_models import (
     ControlPoint,
     SliderCandidate,
@@ -59,6 +60,25 @@ class SliderPipelineConfig:
     # same defaults so behaviour is unchanged, but no longer hardcoded in the call path.
     min_pixel_length: int = 20
     max_pixel_length: int = 400
+    # Procedural slider art (see `procedural_art.py`). A slider that lands in a
+    # quiet passage traces a heart, star or spiral instead of its flow-fitted
+    # shape. A passage counts as quiet when *either* the gap to the next object
+    # exceeds `art_gap_threshold_ms` (long rests in the rhythm) *or* the passage's
+    # intensity multiplier drops below `art_energy_threshold`.
+    #
+    # The multiplier is event energy normalised by the map's mean event energy
+    # (`_intensity_multiplier`), not raw energy: raw energy is song-relative and
+    # sits under 0.7 for most of a typical map, which would turn nearly every
+    # slider into art. Normalising makes 0.7 mean "at least 30% quieter than this
+    # song's average", i.e. the verses and breaks the feature is aimed at.
+    art_enabled: bool = True
+    art_gap_threshold_ms: int = 1000
+    art_energy_threshold: float = 0.7
+    art_scale: float = 80.0
+    # Smallest figure worth drawing. Near a playfield edge the head-anchored
+    # figure has to shrink to fit; below this extent a heart is a smudge, so the
+    # slider keeps its ordinary shape instead.
+    art_min_scale: float = 24.0
 
 
 DEFAULT_SLIDER_CONFIG = SliderPipelineConfig()
@@ -113,6 +133,9 @@ def process_sliders(
     diagnostics = SliderDiagnostics()
     max_sliders = max(1, int(len(objects) * config.max_slider_ratio))
     min_sliders = max(0, int(len(objects) * config.min_slider_ratio)) if config.min_slider_ratio > 0 else 0
+    # Reference level for procedural art: energy is normalised against the map
+    # mean so "quiet" means quiet for this song (see `_intensity_multiplier`).
+    mean_energy = float(np.mean([float(e.energy) for e in events])) if events else 0.0
 
     event_by_time: dict[int, SelectedEvent] = {e.time_ms: e for e in events}
     strategy_lookup = _build_strategy_lookup(phrase_info)
@@ -145,6 +168,19 @@ def process_sliders(
         prev_gap = obj.time - events[event_idx - 1].time_ms if event_idx > 0 else None
         next_gap = events[event_idx + 1].time_ms - obj.time if event_idx < len(events) - 1 else None
 
+        # Procedural art: a slider in a quiet passage traces a figure instead of
+        # its flow-fitted shape. Detected per object from the *object* gap ahead
+        # (what the player actually has to wait for) plus the passage intensity.
+        next_object_gap_ms = objects[i + 1].time - obj.time if i + 1 < len(objects) else None
+        art_scale = None
+        if config.art_enabled and _is_quiet_section(
+            gap_ms=next_object_gap_ms,
+            energy=float(getattr(event, "energy", 0.0) or 0.0),
+            mean_energy=mean_energy,
+            config=config,
+        ):
+            art_scale = config.art_scale
+
         candidate = decide_slider(
             event=event,
             event_index=event_idx,
@@ -165,7 +201,7 @@ def process_sliders(
             new_points.append(points[i] if i < len(points) else _Point(0, 0))
             continue
 
-        slider_result = _build_slider(obj, candidate, points, i, preset, rng, config)
+        slider_result = _build_slider(obj, candidate, points, i, preset, rng, config, art_scale=art_scale)
         if slider_result is None:
             diagnostics.rejected_sliders += 1
             new_objects.append(obj)
@@ -347,6 +383,101 @@ def _build_strategy_lookup(
     return resolve
 
 
+def _intensity_multiplier(energy: float, mean_energy: float) -> float:
+    """Passage energy relative to the map mean (1.0 = exactly average).
+
+    Returns 1.0 when the reference is unknown, so a map without events never
+    looks "quiet" and art does not fire by accident.
+    """
+    if mean_energy <= 1e-9:
+        return 1.0
+    return float(energy) / mean_energy
+
+
+def _is_quiet_section(
+    *,
+    gap_ms: int | None,
+    energy: float,
+    mean_energy: float,
+    config: SliderPipelineConfig,
+) -> bool:
+    """Whether this object sits in a rest or a low-energy passage.
+
+    Two independent signals, matching how mappers describe breaks:
+    a long rhythm gap (``> art_gap_threshold_ms``) or a passage whose intensity
+    multiplier is below ``art_energy_threshold``.
+    """
+    if gap_ms is not None and gap_ms > config.art_gap_threshold_ms:
+        return True
+    return _intensity_multiplier(energy, mean_energy) < config.art_energy_threshold
+
+
+def _build_art_geometry(
+    start_x: int,
+    start_y: int,
+    scale: float,
+    preset: DifficultyPreset,
+    config: SliderPipelineConfig,
+    rng: random.Random,
+) -> tuple[str, list[ControlPoint]] | None:
+    """Generate a procedural figure fitted to the emitted-length bounds.
+
+    The shape family is drawn once from the seeded RNG, then only its scale is
+    adjusted: shrinking (or growing) until the resolved path length lands inside
+    ``[min_pixel_length, max_pixel_length]``.  That matters because the emitted
+    ``pixelLength`` also has to match the drawn geometry -- a heart clamped to
+    400 px while its path is 600 px long would have a tail short of its outline.
+    """
+    margin = float(getattr(preset, "safe_margin", 0) or 0)
+    generator = SliderArtGenerator(rng=rng, margin=margin)
+    shape = rng.choice(ART_SHAPES)
+
+    # Size the figure for the space around its *head*: the figure is anchored by
+    # putting its first point on the head, so a shape that fits around the centre
+    # can still overrun an edge once translated. No room -> no art, rather than a
+    # collapsed smudge in the corner.
+    ceiling = generator.fit_scale_to_head(shape, start_x, start_y, abs(float(scale)))
+    current_scale = min(abs(float(scale)), ceiling)
+    if current_scale < config.art_min_scale:
+        return None
+
+    max_len = float(config.max_pixel_length)
+    min_len = float(config.min_pixel_length)
+    geometry = None
+
+    for _ in range(4):
+        raw_points = generator.generate_shape(shape, start_x, start_y, scale=current_scale)
+        aligned = generator.align_to_head(raw_points, start_x, start_y)
+        anchors = [ControlPoint(x=int(round(x)), y=int(round(y))) for x, y in aligned]
+        if len(anchors) < 2:
+            return None
+
+        geometry = resolve_slider_geometry(
+            start_x,
+            start_y,
+            anchors,
+            "bezier",
+            margin=margin,
+            simplify=False,
+        )
+        if not geometry.control_points:
+            return None
+
+        length = geometry.pixel_length
+        if min_len <= length <= max_len:
+            break
+        if length > max_len:
+            # Path length scales roughly with the figure's extent; a damped ratio
+            # converges in 1-2 passes and never collapses the shape to nothing.
+            current_scale = min(current_scale * max(0.45, min(0.95, (max_len / length) ** 0.8)), ceiling)
+        else:
+            current_scale = min(current_scale * 1.25, ceiling)
+        if current_scale < config.art_min_scale:
+            return None
+
+    return shape, geometry.control_points
+
+
 def _build_slider(
     circle_obj: GeneratedHitObject,
     candidate: SliderCandidate,
@@ -356,8 +487,16 @@ def _build_slider(
     rng: random.Random,
     config: SliderPipelineConfig,
     quality_threshold_override: float | None = None,
+    art_scale: float | None = None,
 ) -> tuple[GeneratedSliderHitObject, tuple[int, int], float] | None:
-    """Build a slider object from a circle and slider candidate."""
+    """Build a slider object from a circle and slider candidate.
+
+    When ``art_scale`` is set the slider traces a procedural figure
+    (heart/star/spiral) of roughly that scale instead of the flow-fitted shape
+    chosen for the candidate.  That path is decorative by design, so it skips
+    the flow/comfort quality gate rather than being rejected by heuristics
+    tuned for reading geometry.
+    """
     if not hasattr(circle_obj, "x") or not hasattr(circle_obj, "y"):
         return None
 
@@ -365,23 +504,37 @@ def _build_slider(
     start_y = int(circle_obj.y)  # type: ignore[union-attr]
 
     flow_in_deg = _flow_in_angle(points, index, start_x, start_y)
-    end_x, end_y = _choose_slider_endpoint(
-        start_x, start_y, points, index, candidate, preset, rng, flow_in_deg
-    )
-    flow_out_deg = _flow_out_angle(points, index, end_x, end_y)
 
-    # Phase 21: expressive shape geometry (multi-segment paths with red
-    # anchors for wave/zigzag/loop; flow-aligned tangents for hooks).
-    path_type, control_points = generate_shape_path(
-        start_x,
-        start_y,
-        end_x,
-        end_y,
-        candidate.preferred_shape,
-        flow_in_deg=flow_in_deg,
-        flow_out_deg=flow_out_deg,
-        curvature=candidate.preferred_curvature,
+    art = (
+        _build_art_geometry(start_x, start_y, float(art_scale), preset, config, rng)
+        if art_scale is not None
+        else None
     )
+
+    if art is not None:
+        control_points = art[1]
+        path_type: SliderPathType = "bezier"
+        end_x = int(round(control_points[-1].x))
+        end_y = int(round(control_points[-1].y))
+        flow_out_deg = _flow_out_angle(points, index, end_x, end_y)
+    else:
+        end_x, end_y = _choose_slider_endpoint(
+            start_x, start_y, points, index, candidate, preset, rng, flow_in_deg
+        )
+        flow_out_deg = _flow_out_angle(points, index, end_x, end_y)
+
+        # Phase 21: expressive shape geometry (multi-segment paths with red
+        # anchors for wave/zigzag/loop; flow-aligned tangents for hooks).
+        path_type, control_points = generate_shape_path(
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            candidate.preferred_shape,
+            flow_in_deg=flow_in_deg,
+            flow_out_deg=flow_out_deg,
+            curvature=candidate.preferred_curvature,
+        )
 
     if not control_points:
         return None
@@ -398,7 +551,9 @@ def _build_slider(
         path_type,
         margin=float(getattr(preset, "safe_margin", 0) or 0),
         simplify_tolerance=config.curve_fit_tolerance,
-        simplify=config.curve_fit_enabled and config.curve_fit_simplify,
+        # Art anchors are the figure itself; collapsing them to a cubic would
+        # erase the shape, so art is never simplified.
+        simplify=config.curve_fit_enabled and config.curve_fit_simplify and art is None,
     )
     if not geometry.control_points:
         return None
@@ -439,7 +594,7 @@ def _build_slider(
     )
 
     effective_threshold = quality_threshold_override if quality_threshold_override is not None else config.quality_threshold
-    if quality.overall < effective_threshold:
+    if quality.overall < effective_threshold and art is None:
         return None
 
     return (
