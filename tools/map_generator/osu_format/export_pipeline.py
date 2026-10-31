@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from ...text_utils import build_osu_filename as _shared_build_osu_filename
 from ..analysis_io import load_json_file
@@ -36,6 +36,7 @@ from .timing_converter import (
     build_timing_points,
     merge_timing_points,
     osu_audio_filename_from_browser_path,
+    timing_points_from_payloads,
 )
 from .validator import validate_parsed_osu_beatmap
 from .writer import write_osu_file, write_osu_text
@@ -55,12 +56,20 @@ def export_osu_file(
     background_filename: str | None = None,
     title_unicode: str | None = None,
     artist_unicode: str | None = None,
+    timing_points: Sequence[dict[str, Any]] | None = None,
 ) -> OsuExportResult:
     beatmap = _load_project_beatmap(map_path)
     osu_creator = creator or _read_nested_string(beatmap.extra_fields, ["osu", "creator"]) or "osu-map-ai"
     difficulty_name = infer_project_difficulty(beatmap)
     osu_version_name = version_name or derive_version_name(beatmap, difficulty_name) or "Imported"
-    timing_points, bpm, offset_ms = build_timing_points(analysis_path)
+    if timing_points is not None:
+        # ML-tracked red lines replace the BPM-derived set entirely: for live
+        # music the local tempo of each measure is the only correct answer.
+        resolved_points = timing_points_from_payloads(timing_points)
+        bpm = 60000.0 / resolved_points[0].beat_length if resolved_points[0].beat_length > 0 else 120.0
+        offset_ms = resolved_points[0].time
+    else:
+        resolved_points, bpm, offset_ms = build_timing_points(analysis_path)
     preserved_sections = extract_preserved_sections(beatmap.extra_fields)
     colours = extract_preserved_colours(beatmap.extra_fields)
     difficulty_values = convert_project_difficulty_to_osu_values(beatmap, difficulty_name)
@@ -71,10 +80,10 @@ def export_osu_file(
     # geometry and the tempo active at that slider, so it tracks BPM changes too.
     slider_velocity_points = build_slider_velocity_points(
         beatmap.objects,
-        timing_points,
+        resolved_points,
         slider_multiplier=float(difficulty_values.slider_multiplier),
     )
-    all_timing_points = merge_timing_points(timing_points, slider_velocity_points)
+    all_timing_points = merge_timing_points(resolved_points, slider_velocity_points)
     sections = OsuWriterSections(
         general=build_general_section(
             osu_audio_filename_from_browser_path(beatmap.audio),
@@ -117,9 +126,14 @@ def export_osu_file(
     warnings: list[str] = []
     if bpm == 120.0:
         warnings.append("No positive BPM estimate was available. Export fell back to 120 BPM.")
-    if len(timing_points) > 1:
+    if timing_points is not None:
         warnings.append(
-            f"Multi-BPM export: {len(timing_points)} uninherited timing points emitted from detected tempo regions."
+            f"Variable BPM export: {len(resolved_points)} uninherited timing points "
+            "from ML beat tracking."
+        )
+    elif len(resolved_points) > 1:
+        warnings.append(
+            f"Multi-BPM export: {len(resolved_points)} uninherited timing points emitted from detected tempo regions."
         )
     if slider_velocity_points:
         warnings.append(

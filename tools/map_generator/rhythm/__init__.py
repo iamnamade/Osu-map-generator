@@ -13,6 +13,7 @@ from .rhythm_pipeline import (
     build_rhythm_model,
     select_rhythmic_timings,
 )
+from .dynamic_timing import VariableBpmAnalyzer
 from .spectral_analyzer import AudioEngine
 from .stem_analyzer import MultiStemAnalyzer
 from .stem_separator import StemSeparator
@@ -20,6 +21,7 @@ from .stem_separator import StemSeparator
 __all__ = [
     "AudioEngine",
     "BpmRegion",
+    "VariableBpmAnalyzer",
     "MultiStemAnalyzer",
     "StemSeparator",
     "PhraseInfo",

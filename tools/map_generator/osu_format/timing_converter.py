@@ -50,6 +50,45 @@ def osu_audio_filename_from_browser_path(value: str) -> str:
     return segments[-1]
 
 
+def timing_points_from_payloads(
+    payloads: Sequence[dict[str, Any]],
+) -> list[OsuTimingPoint]:
+    """Convert generated red-line payloads into ``OsuTimingPoint`` objects.
+
+    Accepted shape is what ``VariableBpmAnalyzer.generate_timing_points()``
+    returns: ``{"time": ms, "beatLength": ms_per_beat, "meter": 4}``.  Sample
+    fields default to the export constants, and every point is uninherited
+    (red) so the client adopts its tempo instead of an inherited multiplier.
+    """
+    constants = load_osu_interop_constants()["timingDefaults"]
+    points: list[OsuTimingPoint] = []
+    for payload in payloads:
+        try:
+            time_ms = float(payload["time"])
+            beat_length = float(payload["beatLength"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise MapGeneratorError(f"Invalid generated timing point: {payload!r}") from error
+        if not beat_length > 0:
+            continue
+        points.append(
+            OsuTimingPoint(
+                time=max(0, int(round(time_ms))),
+                beat_length=beat_length,
+                meter=int(payload.get("meter", constants["meter"])),
+                sample_set=int(constants["sampleSetId"]),
+                sample_index=int(constants["sampleIndex"]),
+                volume=int(payload.get("volume", constants["volume"])),
+                uninherited=1,
+                effects=int(constants["effects"]),
+            )
+        )
+
+    if not points:
+        raise MapGeneratorError("No valid generated timing points were supplied for export.")
+    points.sort(key=lambda point: point.time)
+    return points
+
+
 def build_primary_timing_point(analysis_path: Path) -> tuple[OsuTimingPoint, float, int]:
     analysis = load_analysis_json(analysis_path)
     bpm = analysis.bpm if analysis.bpm > 0 else 120.0

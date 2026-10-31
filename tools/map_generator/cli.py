@@ -504,6 +504,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "export-osu":
+            variable_timing_points = None
+            if args.variable_timing:
+                if args.audio is None:
+                    raise MapGeneratorError(
+                        "--variable-timing requires --audio so beats can be tracked."
+                    )
+                from .rhythm.dynamic_timing import VariableBpmAnalyzer
+
+                variable_timing_points = VariableBpmAnalyzer(
+                    project_root / args.audio
+                ).generate_timing_points()
             result = export_osu_file(
                 map_path=project_root / args.map,
                 analysis_path=project_root / args.analysis,
@@ -513,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
                 beatmap_id=args.beatmap_id,
                 beatmap_set_id=args.beatmap_set_id,
                 background_filename=args.background,
+                timing_points=variable_timing_points,
             )
             print(
                 format_export_console_report(
@@ -1094,6 +1106,19 @@ def _build_parser() -> argparse.ArgumentParser:
     export_osu_parser.add_argument("--beatmap-id", help="Optional BeatmapID override.")
     export_osu_parser.add_argument("--beatmap-set-id", help="Optional BeatmapSetID override.")
     export_osu_parser.add_argument("--background", help="Optional background filename to reference in [Events].")
+    export_osu_parser.add_argument(
+        "--audio",
+        type=Path,
+        help="Audio file used for ML beat tracking when --variable-timing is set.",
+    )
+    export_osu_parser.add_argument(
+        "--variable-timing",
+        action="store_true",
+        help=(
+            "Track beats (madmom, falling back to librosa) and emit one red timing "
+            "point per measure, for live audio whose tempo drifts."
+        ),
+    )
 
     import_osu_parser = subparsers.add_parser(
         "import-osu",

@@ -20,6 +20,7 @@ from .flow_dynamics import FlowEngine
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from ..ml.markov_persona import MapperPersonaModel
+    from ..rhythm.dynamic_timing import VariableBpmAnalyzer
     from ..rhythm.spectral_analyzer import AudioEngine
     from ..rhythm.stem_analyzer import MultiStemAnalyzer
 
@@ -66,6 +67,7 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
         persona_model: "MapperPersonaModel | None" = None,
         audio_engine: "AudioEngine | None" = None,
         stem_analyzer: "MultiStemAnalyzer | None" = None,
+        variable_timing: "VariableBpmAnalyzer | None" = None,
     ) -> None:
         """Create the standard placement strategy.
 
@@ -82,10 +84,31 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
                 sliders held for the phrase length, drums become wider jumps,
                 bass becomes tighter stream spacing.  Takes precedence over the
                 persona and pattern paths.
+            variable_timing: Optional ML beat tracker.  When given, rhythm gaps
+                and distance snap follow the local beat length at each object's
+                timestamp instead of a map-wide BPM, so live recordings stay in
+                sync as the drummer drifts.
         """
         self.persona_model = persona_model
         self.audio_engine = audio_engine
         self.stem_analyzer = stem_analyzer
+        self.variable_timing = variable_timing
+
+    def _beat_length_ms(self, time_ms: int, fallback: float) -> float:
+        """Local beat length at ``time_ms``, falling back to the global value.
+
+        Distance snap and slider duration must follow the tempo the performer
+        actually played; on a variable-BPM track the map-wide average drifts
+        away within a few bars.
+        """
+        tracker = self.variable_timing
+        if tracker is None:
+            return fallback
+        try:
+            value = float(tracker.beat_length_at(float(time_ms)))
+        except (AttributeError, TypeError, ValueError):
+            return fallback
+        return value if value > 0 else fallback
 
     def _intensity_at(self, time_ms: int) -> float:
         """Intensity multiplier at ``time_ms``, clamped to the documented band.
@@ -209,7 +232,9 @@ class OsuStandardPlacementStrategy(PlacementStrategy):
         while len(objects) < target_objects:
             next_state = model.predict_next_state(current_state, previous_state)
 
-            gap_ms = max(min_gap_ms, next_state.delta_beats * beat_ms)
+            # Measure-local tempo, so a drifting performance stays in sync.
+            local_beat_ms = self._beat_length_ms(current_time, beat_ms)
+            gap_ms = max(min_gap_ms, next_state.delta_beats * local_beat_ms)
             object_time = int(round(current_time + gap_ms))
             if object_time > end_ms:
                 break
