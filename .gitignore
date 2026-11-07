@@ -1,17 +1,12 @@
 # Node / build
 node_modules/
 dist/
+.vite/
 
 # Python
 __pycache__/
 .venv/
 .pytest_cache/
-
-# Local tooling state
-.agents/
-.codex/
-.freebuff/
-desktop.ini
 
 # Temp / debug scratch dirs
 .tmp-*/
@@ -25,3 +20,15 @@ exports/
 
 # OS junk
 Thumbs.db
+
+# Audio/video fixtures (tiny only)
+*.mp3
+*.mp4
+*.osz
+
+# Generated test artifacts
+tmp_art_*.json
+tmp_q_*.json
+
+# Workspaces
+workspaces/

@@ -36,20 +36,40 @@ class TestFlowEngine(unittest.TestCase):
 
 
 class StreamContinuityTests(unittest.TestCase):
-    """Contract: each sequential stream step keeps a bounded relative angular
-    sweep instead of a cumulative drift from the first step.
+    """Contract: 100 consecutive stream steps keep angular transitions bounded."""
 
-    The legacy absolute angle checks (the first step landing at a static
-    angle, and 100 accumulated steps drifting away from the initial heading)
-    were removed. Every one-step relative delta is folded to the signed band
-    and asserted against the per-step range.
-    """
+    def _stream_stream(self, steps: int = 100) -> list[Point]:
+        engine = FlowEngine(width=512.0, height=384.0, margin=48.0)
+        # Walk a straight line across the field with a tight 1/4-beat gap so
+        # every step is a stream step (dt_ms <= 150).
+        distance = 40.0
+        prev = (150.0, 192.0)
+        stream: list[Point] = [prev]
+        for step in range(steps):
+            dt = 120.0
+            prev = engine.compute_next_position(None, prev, distance, dt, seed=step)
+            stream.append(prev)
+        return stream
+
+    def test_angular_transitions_do_not_exceed_45_degrees(self) -> None:
+        engine = FlowEngine(width=512.0, height=384.0, margin=48.0)
+        self._assert_stream_band(engine)
+
+    def test_stream_steps_stay_in_stream_band(self) -> None:
+        """One-step deltas are inside the requested [15, 35] deg band."""
+        engine = FlowEngine(width=512.0, height=384.0, margin=48.0)
+        self._assert_stream_band(engine)
 
     @staticmethod
-    def _assert_relative_step_band(engine: FlowEngine, steps: int = 100) -> None:
-        """Assert each relative step delta is inside [0.25, 0.65] radians.
+    def _assert_stream_band(engine: FlowEngine, steps: int = 100) -> None:
+        """Stream steps keep one-step angular deltas inside the band.
 
-        delta = abs((theta_curr - theta_prev + pi) % (2 * pi) - pi)
+        The requested per-step rule is a bounded sweep for each individual
+        step (``abs(dtheta) in [15, 35] deg``).  It constrains the delta of a
+        single move from its immediate predecessor, *not* the accumulated
+        angle after many composed steps, so the 100-step trajectory is
+        sampled with a fresh deterministic seed and every one-step delta is
+        checked against the same short signed range.
         """
         distance = 40.0
         prev = (150.0, 192.0)
@@ -60,26 +80,20 @@ class StreamContinuityTests(unittest.TestCase):
             stream.append(prev)
 
         for i in range(1, len(stream)):
+            # Relative step delta: the angle of the current segment versus
+            # the angle of the previous segment, folded to [-pi, pi].
             theta_prev = math.atan2(
                 stream[i - 1][1] - stream[i - 2][1], stream[i - 1][0] - stream[i - 2][0]
             )
-            theta_curr = math.atan2(
+            theta_next = math.atan2(
                 stream[i][1] - stream[i - 1][1], stream[i][0] - stream[i - 1][0]
             )
-            delta = abs((theta_curr - theta_prev + math.pi) % (2 * math.pi) - math.pi)
-            self.assertGreaterEqual(
-                delta, 0.25,
-                f"stream step {i} below the 0.25 rad lower bound: {math.degrees(delta):.2f}",
-            )
-            self.assertLessEqual(
-                delta, 0.65,
-                f"stream step {i} above the 0.65 rad upper bound: {math.degrees(delta):.2f}",
-            )
+            delta = (theta_next - theta_prev + math.pi) % (2 * math.pi) - math.pi
+            self.assertGreaterEqual(abs(delta), math.radians(15.0),
+                                    f"stream step {i} dropped below the 15 deg floor: {math.degrees(delta):.2f}")
+            self.assertLessEqual(abs(delta), math.radians(35.0),
+                                 f"stream step {i} exceeded the 35 deg ceiling: {math.degrees(delta):.2f}")
 
-    def test_angular_transitions_do_not_exceed_45_degrees(self) -> None:
-        """Each stream step keeps a relative angular delta within 15-37 deg."""
-        engine = FlowEngine(width=512.0, height=384.0, margin=48.0)
-        self._assert_relative_step_band(engine)
 
 class CentripetalSteeringTests(unittest.TestCase):
     """Contract: trajectories targeting the corner (5, 5) are deflected toward

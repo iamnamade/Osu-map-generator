@@ -33,7 +33,6 @@ from .placement.osu_standard import (  # noqa: F401  (re-exported for compatibil
     _build_candidates,
     _clamp_point,
     _distance,
-    _fallback_point,
     _first_point,
     _inside_safe_area,
     _is_near_edge,
